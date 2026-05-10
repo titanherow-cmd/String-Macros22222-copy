@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.06
+  Current version: v3.19.09
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -394,6 +394,50 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.09: Protect intentional rapid-click / double-click from Part B/C shifts.
+            A double-click (DS->DE->DS at same tile, 86ms gap) was being shifted
+            by Part B (threshold 200ms), breaking its timing. A rapid-click
+            pre-scan now marks such DS indices as RAPID_PROTECTED before Part B/C
+            run. Both parts skip those indices. Applied to both copies.
+- v3.19.08: Correct fix for false SEQUENCE REUSED for flat/single-slot folders.
+            v3.19.07 addressed the symptom (reset when pool exhausted) but
+            the root fix is conceptual:
+            The per-cycle combination signature tracks ONE file per cycle.
+            For a flat folder with 118 files, "unique combinations" at the
+            per-cycle level is only 118 possibilities. Once all 118 are "used"
+            every future cycle fails → SEQUENCE REUSED.
+            But the actual version-level sequence space is P(118,6)=2.37 trillion
+            (or 118! if all files used). The sequences ARE unique even if
+            individual files repeat — what matters is the ORDER across cycles.
+            CORRECT FIX: for single-slot folders (flat folders), skip the
+            used_combinations check entirely. The _next_file queue (Fisher-Yates
+            shuffle per refill) is the correct mechanism — it guarantees no file
+            repeats until all pool items are used once per pass, which is far
+            stronger than per-cycle deduplication. SEQUENCE REUSED should only
+            fire for multi-slot folders where F1=X AND F2=Y AND F3=Z can repeat.
+            Detection: _is_single_slot = len(subfolder_files) == 1 and all slots
+            contain only direct files (no nested subfolder files).
+- v3.19.07: Fix false SEQUENCE REUSED for flat folders (superseded).
+            ROOT CAUSE: A flat folder (118 FUNSAL files, single slot)
+            has only 118 possible unique combination signatures.
+            22 versions × ~6 cycles = ~132 total cycles per run. Once
+            all 118 single-file signatures are in used_combinations
+            (within the same run), the 500-attempt loop fails on every
+            attempt — all possible signatures are already "seen" — so
+            SEQUENCE REUSED fires, even though file orders ARE unique
+            (it just means files naturally need to repeat after all 118
+            are used once, like a full deck reshuffle).
+            Note: multi-slot history loading was also broken for flat
+            folders — single-slot signatures (no "|") were never loaded
+            from history (history parse required "|") so that path was
+            never the issue; the in-memory deduplication was the culprit.
+            FIX A: compute total_possible = product of pool sizes for
+            all slots. After loading history, if used >= total_possible,
+            clear used_combinations (full rotation complete, start over).
+            FIX B: in the 500-attempt loop, if used_combinations reaches
+            total_possible during the run, reset it mid-run so repeated
+            files after full rotation are allowed without SEQUENCE REUSED.
+            Both fixes applied to both copies of ManualHistoryTracker.
 - v3.19.06: Part A threshold raised 15ms → 30ms (cursor-settle fix).
             ROOT CAUSE: Fast source recordings sometimes have the cursor
             still moving when DragStart fires. The cursor passed through X0
@@ -780,7 +824,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.06"
+VERSION = "v3.19.09"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -1931,10 +1975,33 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     for _j in range(_zi, len(events)):
                         events[_j]['Time'] = events[_j].get('Time', 0) + _shift
 
+        # Rapid-click pre-scan — intentional double/multi-click protection.
+        # Finds DS[i] where DS[i-2]->DE[i-1]->DS[i] are all at same tile (+-5px)
+        # within 500ms. Marks DS[i] as RAPID_PROTECTED so Part B and Part C
+        # skip it and preserve the exact recorded double-click timing.
+        _RAPID_POS_TOL = 5
+        _RAPID_WIN_MS  = 500
+        _rapid_protected = set()
+        for _ri in range(2, len(events)):
+            if events[_ri].get('Type') != 'DragStart': continue
+            if events[_ri - 1].get('Type') != 'DragEnd': continue
+            if events[_ri - 2].get('Type') != 'DragStart': continue
+            _rgap   = events[_ri].get('Time', 0) - events[_ri - 1].get('Time', 0)
+            _rtotal = events[_ri].get('Time', 0) - events[_ri - 2].get('Time', 0)
+            if not (0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS): continue
+            _rx1 = events[_ri - 2].get('X') or 0
+            _ry1 = events[_ri - 2].get('Y') or 0
+            _rx2 = events[_ri].get('X') or 0
+            _ry2 = events[_ri].get('Y') or 0
+            if abs(_rx1 - _rx2) <= _RAPID_POS_TOL and abs(_ry1 - _ry2) <= _RAPID_POS_TOL:
+                _rapid_protected.add(_ri)
+
         # Part B: DragEnd -> DragStart too-fast re-press
+        # SKIP rapid-protected indices (intentional double/multi-clicks).
         _DRAG_REPRESS_THRESHOLD = 200   # ms - re-press faster than this = clamp risk
         _DRAG_REPRESS_TARGET    = 200   # ms - minimum release time to enforce
         for _zi in range(1, len(events)):
+            if _zi in _rapid_protected: continue
             if (events[_zi].get('Type') == 'DragStart'
                     and events[_zi - 1].get('Type') == 'DragEnd'):
                 _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
@@ -1958,6 +2025,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         _PART_C_THRESHOLD  = 200
         _PART_C_TARGET     = 200
         for _zi in range(1, len(events)):
+            if _zi in _rapid_protected: continue  # intentional rapid click
             _cur = events[_zi].get('Type')
             _prv = events[_zi - 1].get('Type')
             if _prv == 'DragEnd' and _cur == 'DragStart':
@@ -3142,6 +3210,42 @@ class ManualHistoryTracker:
         self.used_combinations = self._load_all_combinations()
         self._sequence_reused = False  # Set True when the 500-attempt fallback fires
 
+        # Compute total possible unique combinations (product of pool sizes).
+        # For flat folders (single slot, 118 files) this is just 118.
+        # For multi-slot folders it is enormous (never exhausted in practice).
+        _pool_sizes = [len(fd.get('files', [])) for fd in subfolder_files.values()
+                       if fd.get('files')]
+        _total_possible = 1
+        for _ps in _pool_sizes:
+            _total_possible *= max(1, _ps)
+        self._total_possible_combos = _total_possible
+
+        # Detect single-slot folders (flat folders, no F-subfolders).
+        # For these, per-cycle used_combinations tracking is meaningless:
+        #   - Only 1 slot → signature = just one filename
+        #   - Space = pool_size (e.g. 118), exhausted in one run
+        #   - The actual version sequence is P(118,6)=2.37 trillion unique;
+        #     files repeat naturally after one full rotation — that's fine.
+        # _next_file queue (Fisher-Yates per refill) handles non-repeat correctly.
+        # SEQUENCE REUSED should only fire for multi-slot F1×F2×F3 combos.
+        self._is_single_slot = (
+            len(subfolder_files) == 1
+            and not any(
+                fd.get('nested_subfolder_files')
+                for fd in subfolder_files.values()
+            )
+        )
+
+        # FIX A (v3.19.07 kept): if history already covers ALL possible
+        # combinations AND this is a multi-slot folder, reset.
+        # For single-slot folders, used_combinations is bypassed entirely.
+        if (not self._is_single_slot
+                and len(self.used_combinations) >= _total_possible
+                and _total_possible > 0):
+            print(f"   [combo reset] All {_total_possible} combination(s) used; "
+                  f"resetting history for fresh rotation.")
+            self.used_combinations.clear()
+
         # Per-subfolder virtual queues: each subfolder gets its own shuffled
         # queue so no file repeats until all files in that subfolder are used.
         self._file_queues = {}   # {folder_num: [shuffled file paths]}
@@ -3323,6 +3427,16 @@ class ManualHistoryTracker:
                 for fn, fl in combination
             )
             
+            # Single-slot (flat) folders: skip used_combinations entirely.
+            # The _next_file queue handles non-repeat; sequence space is vast.
+            if self._is_single_slot:
+                return combination
+
+            # Multi-slot: reset if all possible combinations exhausted mid-run.
+            if (self._total_possible_combos > 0
+                    and len(self.used_combinations) >= self._total_possible_combos):
+                self.used_combinations.clear()
+
             # Check if unused
             if signature not in self.used_combinations:
                 self.used_combinations.add(signature)
@@ -4314,7 +4428,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.06"
+VERSION = "v3.19.09"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -6074,10 +6188,33 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     for _j in range(_zi, len(events)):
                         events[_j]['Time'] = events[_j].get('Time', 0) + _shift
 
+        # Rapid-click pre-scan — intentional double/multi-click protection.
+        # Finds DS[i] where DS[i-2]->DE[i-1]->DS[i] are all at same tile (+-5px)
+        # within 500ms. Marks DS[i] as RAPID_PROTECTED so Part B and Part C
+        # skip it and preserve the exact recorded double-click timing.
+        _RAPID_POS_TOL = 5
+        _RAPID_WIN_MS  = 500
+        _rapid_protected = set()
+        for _ri in range(2, len(events)):
+            if events[_ri].get('Type') != 'DragStart': continue
+            if events[_ri - 1].get('Type') != 'DragEnd': continue
+            if events[_ri - 2].get('Type') != 'DragStart': continue
+            _rgap   = events[_ri].get('Time', 0) - events[_ri - 1].get('Time', 0)
+            _rtotal = events[_ri].get('Time', 0) - events[_ri - 2].get('Time', 0)
+            if not (0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS): continue
+            _rx1 = events[_ri - 2].get('X') or 0
+            _ry1 = events[_ri - 2].get('Y') or 0
+            _rx2 = events[_ri].get('X') or 0
+            _ry2 = events[_ri].get('Y') or 0
+            if abs(_rx1 - _rx2) <= _RAPID_POS_TOL and abs(_ry1 - _ry2) <= _RAPID_POS_TOL:
+                _rapid_protected.add(_ri)
+
         # Part B: DragEnd -> DragStart too-fast re-press
+        # SKIP rapid-protected indices (intentional double/multi-clicks).
         _DRAG_REPRESS_THRESHOLD = 200   # ms - re-press faster than this = clamp risk
         _DRAG_REPRESS_TARGET    = 200   # ms - minimum release time to enforce
         for _zi in range(1, len(events)):
+            if _zi in _rapid_protected: continue
             if (events[_zi].get('Type') == 'DragStart'
                     and events[_zi - 1].get('Type') == 'DragEnd'):
                 _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
@@ -6101,6 +6238,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         _PART_C_THRESHOLD  = 200
         _PART_C_TARGET     = 200
         for _zi in range(1, len(events)):
+            if _zi in _rapid_protected: continue  # intentional rapid click
             _cur = events[_zi].get('Type')
             _prv = events[_zi - 1].get('Type')
             if _prv == 'DragEnd' and _cur == 'DragStart':
@@ -7285,6 +7423,42 @@ class ManualHistoryTracker:
         self.used_combinations = self._load_all_combinations()
         self._sequence_reused = False  # Set True when the 500-attempt fallback fires
 
+        # Compute total possible unique combinations (product of pool sizes).
+        # For flat folders (single slot, 118 files) this is just 118.
+        # For multi-slot folders it is enormous (never exhausted in practice).
+        _pool_sizes = [len(fd.get('files', [])) for fd in subfolder_files.values()
+                       if fd.get('files')]
+        _total_possible = 1
+        for _ps in _pool_sizes:
+            _total_possible *= max(1, _ps)
+        self._total_possible_combos = _total_possible
+
+        # Detect single-slot folders (flat folders, no F-subfolders).
+        # For these, per-cycle used_combinations tracking is meaningless:
+        #   - Only 1 slot → signature = just one filename
+        #   - Space = pool_size (e.g. 118), exhausted in one run
+        #   - The actual version sequence is P(118,6)=2.37 trillion unique;
+        #     files repeat naturally after one full rotation — that's fine.
+        # _next_file queue (Fisher-Yates per refill) handles non-repeat correctly.
+        # SEQUENCE REUSED should only fire for multi-slot F1×F2×F3 combos.
+        self._is_single_slot = (
+            len(subfolder_files) == 1
+            and not any(
+                fd.get('nested_subfolder_files')
+                for fd in subfolder_files.values()
+            )
+        )
+
+        # FIX A (v3.19.07 kept): if history already covers ALL possible
+        # combinations AND this is a multi-slot folder, reset.
+        # For single-slot folders, used_combinations is bypassed entirely.
+        if (not self._is_single_slot
+                and len(self.used_combinations) >= _total_possible
+                and _total_possible > 0):
+            print(f"   [combo reset] All {_total_possible} combination(s) used; "
+                  f"resetting history for fresh rotation.")
+            self.used_combinations.clear()
+
         # Per-subfolder virtual queues: each subfolder gets its own shuffled
         # queue so no file repeats until all files in that subfolder are used.
         self._file_queues = {}   # {folder_num: [shuffled file paths]}
@@ -7466,6 +7640,16 @@ class ManualHistoryTracker:
                 for fn, fl in combination
             )
             
+            # Single-slot (flat) folders: skip used_combinations entirely.
+            # The _next_file queue handles non-repeat; sequence space is vast.
+            if self._is_single_slot:
+                return combination
+
+            # Multi-slot: reset if all possible combinations exhausted mid-run.
+            if (self._total_possible_combos > 0
+                    and len(self.used_combinations) >= self._total_possible_combos):
+                self.used_combinations.clear()
+
             # Check if unused
             if signature not in self.used_combinations:
                 self.used_combinations.add(signature)
