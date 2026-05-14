@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.09
+  Current version: v3.19.10
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -394,6 +394,18 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.10: Part A now inserts a settling MouseMove at the click's exact
+            coordinates before the click fires, not just a time shift.
+            ROOT CAUSE: Part A shifted the click forward 35ms but left the
+            cursor parked at the last recorded MM position (Bx-4, By-3).
+            Since the macro player clicks at cursor position (not at the
+            stored X/Y in the DragStart event), the click still fired at
+            the wrong tile.
+            FIX: When Part A detects a gap and the click event has X/Y,
+            insert a MouseMove at (click_x, click_y) timed 15ms before
+            the (now-shifted) click. Cursor is guaranteed to be at the
+            correct tile when the click fires.
+            Applied to both copies.
 - v3.19.09: Protect intentional rapid-click / double-click from Part B/C shifts.
             A double-click (DS->DE->DS at same tile, 86ms gap) was being shifted
             by Part B (threshold 200ms), breaking its timing. A rapid-click
@@ -824,7 +836,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.09"
+VERSION = "v3.19.10"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -1964,8 +1976,9 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # any click with < 30ms since the last cursor movement is shifted to
         # 35ms after that MM, giving the macro player time to register the
         # cursor at its settled position before the click fires.
-        _ZERO_GAP_THRESHOLD = 30    # ms - gaps below this = cursor still moving
-        _ZERO_GAP_TARGET    = 35    # ms - minimum settle time to enforce
+        _ZERO_GAP_THRESHOLD  = 30   # ms - gaps below this = cursor still moving
+        _ZERO_GAP_TARGET     = 35   # ms - minimum settle time to enforce
+        _SETTLE_BEFORE_CLICK = 15   # ms - settling MM lands this many ms before click
         for _zi in range(1, len(events)):
             if (events[_zi].get('Type') in _CLICK_TYPES
                     and events[_zi - 1].get('Type') == 'MouseMove'):
@@ -1974,7 +1987,23 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     _shift = _ZERO_GAP_TARGET - _gap
                     for _j in range(_zi, len(events)):
                         events[_j]['Time'] = events[_j].get('Time', 0) + _shift
-
+                    # Insert a settling MouseMove at the click's own coords,
+                    # timed _SETTLE_BEFORE_CLICK ms before the (now-shifted) click.
+                    # This guarantees the cursor is at the correct tile when the
+                    # click fires, regardless of where the last recorded MM landed.
+                    _click_x = events[_zi].get('X')
+                    _click_y = events[_zi].get('Y')
+                    if _click_x is not None and _click_y is not None:
+                        _settle_mm = {
+                            'Type': 'MouseMove',
+                            'Time': events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
+                            'X':    _click_x,
+                            'Y':    _click_y,
+                        }
+                        events.insert(_zi, _settle_mm)
+                        # _zi now points to the settling MM; the click is at _zi+1.
+                        # Part B/C loops run AFTER this loop so their indices are
+                        # unaffected — they operate on the already-modified list.
         # Rapid-click pre-scan — intentional double/multi-click protection.
         # Finds DS[i] where DS[i-2]->DE[i-1]->DS[i] are all at same tile (+-5px)
         # within 500ms. Marks DS[i] as RAPID_PROTECTED so Part B and Part C
@@ -4428,7 +4457,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.09"
+VERSION = "v3.19.10"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -6177,8 +6206,9 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # any click with < 30ms since the last cursor movement is shifted to
         # 35ms after that MM, giving the macro player time to register the
         # cursor at its settled position before the click fires.
-        _ZERO_GAP_THRESHOLD = 30    # ms - gaps below this = cursor still moving
-        _ZERO_GAP_TARGET    = 35    # ms - minimum settle time to enforce
+        _ZERO_GAP_THRESHOLD  = 30   # ms - gaps below this = cursor still moving
+        _ZERO_GAP_TARGET     = 35   # ms - minimum settle time to enforce
+        _SETTLE_BEFORE_CLICK = 15   # ms - settling MM lands this many ms before click
         for _zi in range(1, len(events)):
             if (events[_zi].get('Type') in _CLICK_TYPES
                     and events[_zi - 1].get('Type') == 'MouseMove'):
@@ -6187,7 +6217,23 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     _shift = _ZERO_GAP_TARGET - _gap
                     for _j in range(_zi, len(events)):
                         events[_j]['Time'] = events[_j].get('Time', 0) + _shift
-
+                    # Insert a settling MouseMove at the click's own coords,
+                    # timed _SETTLE_BEFORE_CLICK ms before the (now-shifted) click.
+                    # This guarantees the cursor is at the correct tile when the
+                    # click fires, regardless of where the last recorded MM landed.
+                    _click_x = events[_zi].get('X')
+                    _click_y = events[_zi].get('Y')
+                    if _click_x is not None and _click_y is not None:
+                        _settle_mm = {
+                            'Type': 'MouseMove',
+                            'Time': events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
+                            'X':    _click_x,
+                            'Y':    _click_y,
+                        }
+                        events.insert(_zi, _settle_mm)
+                        # _zi now points to the settling MM; the click is at _zi+1.
+                        # Part B/C loops run AFTER this loop so their indices are
+                        # unaffected — they operate on the already-modified list.
         # Rapid-click pre-scan — intentional double/multi-click protection.
         # Finds DS[i] where DS[i-2]->DE[i-1]->DS[i] are all at same tile (+-5px)
         # within 500ms. Marks DS[i] as RAPID_PROTECTED so Part B and Part C
