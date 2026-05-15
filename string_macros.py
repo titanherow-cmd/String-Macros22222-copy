@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.11
+  Current version: v3.19.12
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -394,6 +394,22 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.12: Added out-of-bounds MouseMove clamp (new Part E).
+            ROOT CAUSE: Source recordings can contain cursor positions
+            outside the game canvas (e.g. Y=21 = browser title bar) that
+            were safe when recorded by a human (no click = no focus change)
+            but cause focus loss during simulated playback — the OS/browser
+            reacts to the simulated cursor entering system UI areas. The
+            cursor then parks at the bad position for the duration of the
+            idle gap, and the following click fires on an unfocused window.
+            FIX: New Part E loop runs after Part D. For each MM whose
+            coordinates are outside safe bounds (_OOB_SAFE_Y_MIN=50,
+            _OOB_SAFE_Y_MAX=900, X=0-1920), if the gap AFTER the event
+            is >= _OOB_IDLE_GATE (1000ms) — meaning the cursor is about
+            to be parked there — replace its X/Y with the last known
+            safe position. Fast-moving paths that pass through unusual
+            coords mid-sweep are left untouched (small gap_after).
+            Applied to both copies.
 - v3.19.11: Added zero-gap DragEnd guard (new Part D).
             ROOT CAUSE: A DragEnd firing at the exact same timestamp as
             the preceding MouseMove (0ms gap) causes the button-release
@@ -850,7 +866,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.11"
+VERSION = "v3.19.12"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -2099,6 +2115,39 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                 for _j in range(_di, len(events)):
                     events[_j]['Time'] = events[_j].get('Time', 0) + _de_shift
         # --- end Part D ---
+        # --- Part E: out-of-bounds MouseMove clamp ---
+        # Cursor positions outside game bounds are safe during real recording
+        # (no click = no focus change) but dangerous in simulated playback
+        # (OS/browser responds to cursor entering title bar / system UI area).
+        # If an out-of-bounds MM is followed by a long idle (cursor parked
+        # there), replace its coords with the last known safe position.
+        _OOB_SAFE_Y_MIN  = 50    # anything above this is browser chrome / title bar
+        _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
+        _OOB_SAFE_X_MIN  = 0
+        _OOB_SAFE_X_MAX  = 1920
+        _OOB_IDLE_GATE   = 1000  # ms — only clamp MMs about to be parked here
+
+        _last_safe_x, _last_safe_y = None, None
+        for _ei in range(len(events)):
+            _ex = events[_ei].get('X')
+            _ey = events[_ei].get('Y')
+            if _ex is None or _ey is None:
+                continue  # key event, skip
+            _in_bounds = (_OOB_SAFE_X_MIN <= _ex <= _OOB_SAFE_X_MAX and
+                          _OOB_SAFE_Y_MIN <= _ey <= _OOB_SAFE_Y_MAX)
+            if _in_bounds:
+                _last_safe_x, _last_safe_y = _ex, _ey
+            else:
+                # Out of bounds. Only clamp if the cursor is about to be
+                # parked here (large gap AFTER this event). Fast-moving paths
+                # that pass through unusual coords mid-sweep are left alone.
+                _gap_after = (events[_ei + 1]['Time'] - events[_ei]['Time']
+                              if _ei < len(events) - 1 else 0)
+                if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
+                    events[_ei]['X'] = _last_safe_x
+                    events[_ei]['Y'] = _last_safe_y
+        # --- end Part E ---
+
 
         # Check if dmwm file
         if is_dmwm:
@@ -4491,7 +4540,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.11"
+VERSION = "v3.19.12"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -6349,6 +6398,39 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                 for _j in range(_di, len(events)):
                     events[_j]['Time'] = events[_j].get('Time', 0) + _de_shift
         # --- end Part D ---
+        # --- Part E: out-of-bounds MouseMove clamp ---
+        # Cursor positions outside game bounds are safe during real recording
+        # (no click = no focus change) but dangerous in simulated playback
+        # (OS/browser responds to cursor entering title bar / system UI area).
+        # If an out-of-bounds MM is followed by a long idle (cursor parked
+        # there), replace its coords with the last known safe position.
+        _OOB_SAFE_Y_MIN  = 50    # anything above this is browser chrome / title bar
+        _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
+        _OOB_SAFE_X_MIN  = 0
+        _OOB_SAFE_X_MAX  = 1920
+        _OOB_IDLE_GATE   = 1000  # ms — only clamp MMs about to be parked here
+
+        _last_safe_x, _last_safe_y = None, None
+        for _ei in range(len(events)):
+            _ex = events[_ei].get('X')
+            _ey = events[_ei].get('Y')
+            if _ex is None or _ey is None:
+                continue  # key event, skip
+            _in_bounds = (_OOB_SAFE_X_MIN <= _ex <= _OOB_SAFE_X_MAX and
+                          _OOB_SAFE_Y_MIN <= _ey <= _OOB_SAFE_Y_MAX)
+            if _in_bounds:
+                _last_safe_x, _last_safe_y = _ex, _ey
+            else:
+                # Out of bounds. Only clamp if the cursor is about to be
+                # parked here (large gap AFTER this event). Fast-moving paths
+                # that pass through unusual coords mid-sweep are left alone.
+                _gap_after = (events[_ei + 1]['Time'] - events[_ei]['Time']
+                              if _ei < len(events) - 1 else 0)
+                if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
+                    events[_ei]['X'] = _last_safe_x
+                    events[_ei]['Y'] = _last_safe_y
+        # --- end Part E ---
+
 
         # Check if dmwm file
         if is_dmwm:
