@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.10
+  Current version: v3.19.11
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -394,6 +394,20 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.11: Added zero-gap DragEnd guard (new Part D).
+            ROOT CAUSE: A DragEnd firing at the exact same timestamp as
+            the preceding MouseMove (0ms gap) causes the button-release
+            to register while the cursor is still mid-movement. No
+            existing protection caught this — Part A only watches
+            button-down types, Part B only catches DE->DS pairs, Part C
+            skips DragEnd entirely.
+            FIX: New Part D loop runs after Part C. When a DragEnd has
+            a gap < _DRAG_END_SETTLE_THRESHOLD from the preceding
+            MouseMove, shift the DragEnd (and all following events)
+            forward by (_DRAG_END_SETTLE_TARGET - gap) ms. Does not
+            insert a new MM — DragEnd is a release, not a position
+            event, so only time correction is needed.
+            Applied to both copies.
 - v3.19.10: Part A now inserts a settling MouseMove at the click's exact
             coordinates before the click fires, not just a time shift.
             ROOT CAUSE: Part A shifted the click forward 35ms but left the
@@ -836,7 +850,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.10"
+VERSION = "v3.19.11"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -2065,6 +2079,26 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     _shift = _PART_C_TARGET - _gap
                     for _j in range(_zi, len(events)):
                         events[_j]['Time'] = events[_j].get('Time', 0) + _shift
+
+
+        # --- Part D: zero-gap DragEnd guard ---
+        # A DragEnd firing at the same timestamp as the preceding MouseMove
+        # causes the button-release to register mid-movement.
+        # Shift it forward so the release always lands after the cursor settles.
+        _DRAG_END_SETTLE_THRESHOLD = 20   # ms - gaps below this trigger the fix
+        _DRAG_END_SETTLE_TARGET    = 20   # ms - minimum gap to enforce after shift
+
+        for _di in range(1, len(events)):
+            if events[_di].get('Type') != 'DragEnd':
+                continue
+            if events[_di - 1].get('Type') != 'MouseMove':
+                continue
+            _de_gap = events[_di].get('Time', 0) - events[_di - 1].get('Time', 0)
+            if 0 <= _de_gap < _DRAG_END_SETTLE_THRESHOLD:
+                _de_shift = _DRAG_END_SETTLE_TARGET - _de_gap
+                for _j in range(_di, len(events)):
+                    events[_j]['Time'] = events[_j].get('Time', 0) + _de_shift
+        # --- end Part D ---
 
         # Check if dmwm file
         if is_dmwm:
@@ -4457,7 +4491,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.10"
+VERSION = "v3.19.11"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -6295,6 +6329,26 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     _shift = _PART_C_TARGET - _gap
                     for _j in range(_zi, len(events)):
                         events[_j]['Time'] = events[_j].get('Time', 0) + _shift
+
+
+        # --- Part D: zero-gap DragEnd guard ---
+        # A DragEnd firing at the same timestamp as the preceding MouseMove
+        # causes the button-release to register mid-movement.
+        # Shift it forward so the release always lands after the cursor settles.
+        _DRAG_END_SETTLE_THRESHOLD = 20   # ms - gaps below this trigger the fix
+        _DRAG_END_SETTLE_TARGET    = 20   # ms - minimum gap to enforce after shift
+
+        for _di in range(1, len(events)):
+            if events[_di].get('Type') != 'DragEnd':
+                continue
+            if events[_di - 1].get('Type') != 'MouseMove':
+                continue
+            _de_gap = events[_di].get('Time', 0) - events[_di - 1].get('Time', 0)
+            if 0 <= _de_gap < _DRAG_END_SETTLE_THRESHOLD:
+                _de_shift = _DRAG_END_SETTLE_TARGET - _de_gap
+                for _j in range(_di, len(events)):
+                    events[_j]['Time'] = events[_j].get('Time', 0) + _de_shift
+        # --- end Part D ---
 
         # Check if dmwm file
         if is_dmwm:
