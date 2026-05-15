@@ -2025,10 +2025,12 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     _click_y = events[_zi].get('Y')
                     if _click_x is not None and _click_y is not None:
                         _settle_mm = {
-                            'Type': 'MouseMove',
-                            'Time': events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
-                            'X':    _click_x,
-                            'Y':    _click_y,
+                            'Type':    'MouseMove',
+                            'Time':    events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
+                            'X':       _click_x,
+                            'Y':       _click_y,
+                            'Delta':   None,
+                            'KeyCode': None,
                         }
                         events.insert(_zi, _settle_mm)
                         # _zi now points to the settling MM; the click is at _zi+1.
@@ -6308,10 +6310,12 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     _click_y = events[_zi].get('Y')
                     if _click_x is not None and _click_y is not None:
                         _settle_mm = {
-                            'Type': 'MouseMove',
-                            'Time': events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
-                            'X':    _click_x,
-                            'Y':    _click_y,
+                            'Type':    'MouseMove',
+                            'Time':    events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
+                            'X':       _click_x,
+                            'Y':       _click_y,
+                            'Delta':   None,
+                            'KeyCode': None,
                         }
                         events.insert(_zi, _settle_mm)
                         # _zi now points to the settling MM; the click is at _zi+1.
