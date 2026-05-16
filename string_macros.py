@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.12
+  Current version: v3.19.13
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -394,6 +394,12 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.13: Per-version target duration variance widened from ±5min to ±15min.
+            Each version independently draws a random offset in [-15, +15] min
+            from the base target. A max(60000ms) floor prevents negative targets
+            on very short base durations. Full-cycle guarantee unchanged —
+            get_sequence() always completes a natural cycle end before stopping.
+            Console output now shows actual signed variance (e.g. var +12.3m).
 - v3.19.12: Added out-of-bounds MouseMove clamp (new Part E).
             ROOT CAUSE: Source recordings can contain cursor positions
             outside the game canvas (e.g. Y=21 = browser title bar) that
@@ -866,7 +872,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.12"
+VERSION = "v3.19.13"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -4542,7 +4548,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.12"
+VERSION = "v3.19.13"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -8687,7 +8693,7 @@ def main():
         )
         target_ms = args.target_minutes * 60000
         
-        _base_target_ms = target_ms  # base for per-version +-5min variance
+        _base_target_ms = target_ms  # base for per-version +-15min variance
         # Track all combinations used in THIS RUN for this folder
         folder_combinations_used = []
         
@@ -8854,11 +8860,13 @@ def main():
             
             # Per-version target: ±5 minutes random variance around base target
             # Each version independently drawn — decimal ms, never rounded
-            _variance_ms = rng.uniform(-5 * 60000, 5 * 60000)
-            target_ms = _base_target_ms + _variance_ms
+            _variance_ms = rng.uniform(-15 * 60000, 15 * 60000)
+            target_ms = max(60000, _base_target_ms + _variance_ms)
             _t_min = int(target_ms // 60000)
             _t_sec = int((target_ms % 60000) / 1000)
-            print(f"     {v_letter}: target = {_t_min}m {_t_sec}s (base {args.target_minutes}m ± 5m)")
+            _var_actual = (target_ms - _base_target_ms) / 60000
+            _var_sign   = "+" if _var_actual >= 0 else ""
+            print(f"     {v_letter}: target = {_t_min}m {_t_sec}s (base {args.target_minutes}m, var {_var_sign}{_var_actual:.1f}m)")
 
             # Build cycles until target reached
             stringed_events = []
