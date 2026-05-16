@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.13
+  Current version: v3.19.14
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -394,6 +394,15 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.14: Expanded rapid pre-scan to detect soft double-clicks (cursor drift
+            between clicks). Previous scanner required DS->DE->DS with no events
+            in between (strict same-tile pattern). Now also detects
+            DS->DE->(MMs)->DS within 500ms and 20px drift (_RAPID_POS_TOL_SOFT).
+            These are marked as soft_double_protected and skipped by Part B.
+            ROOT CAUSE: Double-clicks with slight cursor movement between them
+            (e.g. 15px drift) were structurally invisible to the rapid pre-scan
+            (type_ok=False) leaving them unrecognised by any protection.
+            Applied to both copies.
 - v3.19.13: Per-version target duration variance widened from ±5min to ±15min.
             Each version independently draws a random offset in [-15, +15] min
             from the base target. A max(60000ms) floor prevents negative targets
@@ -872,7 +881,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.13"
+VERSION = "v3.19.14"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -2042,33 +2051,83 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                         # _zi now points to the settling MM; the click is at _zi+1.
                         # Part B/C loops run AFTER this loop so their indices are
                         # unaffected — they operate on the already-modified list.
-        # Rapid-click pre-scan — intentional double/multi-click protection.
-        # Finds DS[i] where DS[i-2]->DE[i-1]->DS[i] are all at same tile (+-5px)
-        # within 500ms. Marks DS[i] as RAPID_PROTECTED so Part B and Part C
-        # skip it and preserve the exact recorded double-click timing.
-        _RAPID_POS_TOL = 5
-        _RAPID_WIN_MS  = 500
-        _rapid_protected = set()
-        for _ri in range(2, len(events)):
-            if events[_ri].get('Type') != 'DragStart': continue
-            if events[_ri - 1].get('Type') != 'DragEnd': continue
-            if events[_ri - 2].get('Type') != 'DragStart': continue
-            _rgap   = events[_ri].get('Time', 0) - events[_ri - 1].get('Time', 0)
-            _rtotal = events[_ri].get('Time', 0) - events[_ri - 2].get('Time', 0)
-            if not (0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS): continue
-            _rx1 = events[_ri - 2].get('X') or 0
-            _ry1 = events[_ri - 2].get('Y') or 0
-            _rx2 = events[_ri].get('X') or 0
-            _ry2 = events[_ri].get('Y') or 0
-            if abs(_rx1 - _rx2) <= _RAPID_POS_TOL and abs(_ry1 - _ry2) <= _RAPID_POS_TOL:
-                _rapid_protected.add(_ri)
+        # --- Rapid pre-scan: protect intentional double/rapid clicks from Part B ---
+        # Strict path:  DS[i-2] -> DE[i-1] -> DS[i]  (no MMs between, same tile <=5px)
+        # Soft path:    DS -> DE -> (any MMs) -> DS     (cursor drift allowed, <=20px)
+        # Both mark the second DS as protected so Part B never shifts it.
+        _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
+        _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
+        _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
+
+        rapid_protected       = set()   # strict rapid-click indices
+        soft_double_protected = set()   # soft double-click indices (MM drift between)
+
+        for _ri in range(1, len(events)):
+            if events[_ri].get('Type') != 'DragStart':
+                continue
+
+            # --- Strict path (existing logic, unchanged) ---
+            if (_ri >= 2
+                    and events[_ri - 1].get('Type') == 'DragEnd'
+                    and events[_ri - 2].get('Type') == 'DragStart'):
+                _rgap   = events[_ri]['Time'] - events[_ri - 1].get('Time', 0)
+                _rtotal = events[_ri]['Time'] - events[_ri - 2].get('Time', 0)
+                if 0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS:
+                    _rx1 = events[_ri - 2].get('X') or 0
+                    _ry1 = events[_ri - 2].get('Y') or 0
+                    _rx2 = events[_ri].get('X') or 0
+                    _ry2 = events[_ri].get('Y') or 0
+                    _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
+                    if _rdist <= _RAPID_POS_TOL:
+                        rapid_protected.add(_ri)
+                        continue  # already handled, skip soft check
+
+            # --- Soft path (new): DS -> DE -> (MMs only) -> DS ---
+            # Walk backwards from _ri-1 through MouseMoves to find the preceding DragEnd
+            _de_idx = None
+            for _back in range(_ri - 1, max(_ri - 15, -1), -1):
+                _bt = events[_back].get('Type')
+                if _bt == 'DragEnd':
+                    _de_idx = _back
+                    break
+                elif _bt != 'MouseMove':
+                    break   # hit a non-MM non-DE - not a clean drift pattern
+
+            if _de_idx is None:
+                continue
+
+            # Walk backwards from _de_idx-1 to find the DragStart that opened this DE
+            _ds_idx = None
+            for _back in range(_de_idx - 1, max(_de_idx - 5, -1), -1):
+                if events[_back].get('Type') == 'DragStart':
+                    _ds_idx = _back
+                    break
+                elif events[_back].get('Type') != 'MouseMove':
+                    break
+
+            if _ds_idx is None:
+                continue
+
+            _rtotal = events[_ri]['Time'] - events[_ds_idx].get('Time', 0)
+            if not (0 < _rtotal < _RAPID_WIN_MS):
+                continue
+
+            _rx1   = events[_ds_idx].get('X') or 0
+            _ry1   = events[_ds_idx].get('Y') or 0
+            _rx2   = events[_ri].get('X') or 0
+            _ry2   = events[_ri].get('Y') or 0
+            _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
+
+            if _rdist <= _RAPID_POS_TOL_SOFT:
+                soft_double_protected.add(_ri)
+        # --- end rapid pre-scan ---
 
         # Part B: DragEnd -> DragStart too-fast re-press
         # SKIP rapid-protected indices (intentional double/multi-clicks).
         _DRAG_REPRESS_THRESHOLD = 200   # ms - re-press faster than this = clamp risk
         _DRAG_REPRESS_TARGET    = 200   # ms - minimum release time to enforce
         for _zi in range(1, len(events)):
-            if _zi in _rapid_protected: continue
+            if _zi in rapid_protected or _zi in soft_double_protected: continue
             if (events[_zi].get('Type') == 'DragStart'
                     and events[_zi - 1].get('Type') == 'DragEnd'):
                 _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
@@ -2092,7 +2151,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         _PART_C_THRESHOLD  = 200
         _PART_C_TARGET     = 200
         for _zi in range(1, len(events)):
-            if _zi in _rapid_protected: continue  # intentional rapid click
+            if _zi in rapid_protected: continue  # intentional rapid click
             _cur = events[_zi].get('Type')
             _prv = events[_zi - 1].get('Type')
             if _prv == 'DragEnd' and _cur == 'DragStart':
@@ -4548,7 +4607,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.13"
+VERSION = "v3.19.14"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -6327,33 +6386,83 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                         # _zi now points to the settling MM; the click is at _zi+1.
                         # Part B/C loops run AFTER this loop so their indices are
                         # unaffected — they operate on the already-modified list.
-        # Rapid-click pre-scan — intentional double/multi-click protection.
-        # Finds DS[i] where DS[i-2]->DE[i-1]->DS[i] are all at same tile (+-5px)
-        # within 500ms. Marks DS[i] as RAPID_PROTECTED so Part B and Part C
-        # skip it and preserve the exact recorded double-click timing.
-        _RAPID_POS_TOL = 5
-        _RAPID_WIN_MS  = 500
-        _rapid_protected = set()
-        for _ri in range(2, len(events)):
-            if events[_ri].get('Type') != 'DragStart': continue
-            if events[_ri - 1].get('Type') != 'DragEnd': continue
-            if events[_ri - 2].get('Type') != 'DragStart': continue
-            _rgap   = events[_ri].get('Time', 0) - events[_ri - 1].get('Time', 0)
-            _rtotal = events[_ri].get('Time', 0) - events[_ri - 2].get('Time', 0)
-            if not (0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS): continue
-            _rx1 = events[_ri - 2].get('X') or 0
-            _ry1 = events[_ri - 2].get('Y') or 0
-            _rx2 = events[_ri].get('X') or 0
-            _ry2 = events[_ri].get('Y') or 0
-            if abs(_rx1 - _rx2) <= _RAPID_POS_TOL and abs(_ry1 - _ry2) <= _RAPID_POS_TOL:
-                _rapid_protected.add(_ri)
+        # --- Rapid pre-scan: protect intentional double/rapid clicks from Part B ---
+        # Strict path:  DS[i-2] -> DE[i-1] -> DS[i]  (no MMs between, same tile <=5px)
+        # Soft path:    DS -> DE -> (any MMs) -> DS     (cursor drift allowed, <=20px)
+        # Both mark the second DS as protected so Part B never shifts it.
+        _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
+        _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
+        _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
+
+        rapid_protected       = set()   # strict rapid-click indices
+        soft_double_protected = set()   # soft double-click indices (MM drift between)
+
+        for _ri in range(1, len(events)):
+            if events[_ri].get('Type') != 'DragStart':
+                continue
+
+            # --- Strict path (existing logic, unchanged) ---
+            if (_ri >= 2
+                    and events[_ri - 1].get('Type') == 'DragEnd'
+                    and events[_ri - 2].get('Type') == 'DragStart'):
+                _rgap   = events[_ri]['Time'] - events[_ri - 1].get('Time', 0)
+                _rtotal = events[_ri]['Time'] - events[_ri - 2].get('Time', 0)
+                if 0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS:
+                    _rx1 = events[_ri - 2].get('X') or 0
+                    _ry1 = events[_ri - 2].get('Y') or 0
+                    _rx2 = events[_ri].get('X') or 0
+                    _ry2 = events[_ri].get('Y') or 0
+                    _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
+                    if _rdist <= _RAPID_POS_TOL:
+                        rapid_protected.add(_ri)
+                        continue  # already handled, skip soft check
+
+            # --- Soft path (new): DS -> DE -> (MMs only) -> DS ---
+            # Walk backwards from _ri-1 through MouseMoves to find the preceding DragEnd
+            _de_idx = None
+            for _back in range(_ri - 1, max(_ri - 15, -1), -1):
+                _bt = events[_back].get('Type')
+                if _bt == 'DragEnd':
+                    _de_idx = _back
+                    break
+                elif _bt != 'MouseMove':
+                    break   # hit a non-MM non-DE - not a clean drift pattern
+
+            if _de_idx is None:
+                continue
+
+            # Walk backwards from _de_idx-1 to find the DragStart that opened this DE
+            _ds_idx = None
+            for _back in range(_de_idx - 1, max(_de_idx - 5, -1), -1):
+                if events[_back].get('Type') == 'DragStart':
+                    _ds_idx = _back
+                    break
+                elif events[_back].get('Type') != 'MouseMove':
+                    break
+
+            if _ds_idx is None:
+                continue
+
+            _rtotal = events[_ri]['Time'] - events[_ds_idx].get('Time', 0)
+            if not (0 < _rtotal < _RAPID_WIN_MS):
+                continue
+
+            _rx1   = events[_ds_idx].get('X') or 0
+            _ry1   = events[_ds_idx].get('Y') or 0
+            _rx2   = events[_ri].get('X') or 0
+            _ry2   = events[_ri].get('Y') or 0
+            _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
+
+            if _rdist <= _RAPID_POS_TOL_SOFT:
+                soft_double_protected.add(_ri)
+        # --- end rapid pre-scan ---
 
         # Part B: DragEnd -> DragStart too-fast re-press
         # SKIP rapid-protected indices (intentional double/multi-clicks).
         _DRAG_REPRESS_THRESHOLD = 200   # ms - re-press faster than this = clamp risk
         _DRAG_REPRESS_TARGET    = 200   # ms - minimum release time to enforce
         for _zi in range(1, len(events)):
-            if _zi in _rapid_protected: continue
+            if _zi in rapid_protected or _zi in soft_double_protected: continue
             if (events[_zi].get('Type') == 'DragStart'
                     and events[_zi - 1].get('Type') == 'DragEnd'):
                 _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
@@ -6377,7 +6486,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         _PART_C_THRESHOLD  = 200
         _PART_C_TARGET     = 200
         for _zi in range(1, len(events)):
-            if _zi in _rapid_protected: continue  # intentional rapid click
+            if _zi in rapid_protected: continue  # intentional rapid click
             _cur = events[_zi].get('Type')
             _prv = events[_zi - 1].get('Type')
             if _prv == 'DragEnd' and _cur == 'DragStart':
