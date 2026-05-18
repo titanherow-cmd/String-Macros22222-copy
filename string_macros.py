@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.14
+  Current version: v3.19.15
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -394,6 +394,17 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.15: Added _MAX_SINGLE_PAUSE_MS = 1,536,000ms (25.6 min) hard cap.
+            Applied via min() at all 4 pause generation points: intra-file
+            % pause, massive pause, mid-event pause, before-file pause.
+            In practice only the intra-file % pause can approach the ceiling
+            (very long source files at 15% pct); all others are well below.
+            ALSO: cursor transition no longer skipped for click-sensitive
+            folders. Only jitter (Step 1) and idle wandering (Step 4) in
+            apply_cycle_features remain suppressed for click-sensitive.
+            Transition is position-critical, not accuracy-sensitive, so
+            running it for click-sensitive folders is safe and correct.
+            slot_is_click_sensitive suppression unchanged.
 - v3.19.14: Expanded rapid pre-scan to detect soft double-clicks (cursor drift
             between clicks). Previous scanner required DS->DE->DS with no events
             in between (strict same-tile pattern). Now also detects
@@ -881,7 +892,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.14"
+VERSION = "v3.19.15"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -1513,7 +1524,7 @@ def insert_intra_file_pauses(events: list, rng: random.Random,
         return events, 0, float('inf')
 
     # Float ms - no rounding
-    pause_duration = file_duration_ms * pct
+    pause_duration = min(file_duration_ms * pct, _MAX_SINGLE_PAUSE_MS)
 
     protected_set = set()
     for s, e in protected_ranges:
@@ -1896,7 +1907,7 @@ def insert_massive_pause(events: list, rng: random.Random, mult: float = 1.0) ->
         return events, 0, 0
     
     # Generate massive pause: 4-7 minutes (240000-420000ms) x multiplier
-    pause_duration = int(rng.uniform(240000.0, 420000.0))  # no mult — flat 4-7 min
+    pause_duration = min(int(rng.uniform(240000.0, 420000.0)), _MAX_SINGLE_PAUSE_MS)  # no mult — flat 4-7 min, hard cap applied
     
     # Detect protected ranges (rapid clicks, double-clicks)
     protected_ranges = detect_rapid_click_sequences(events)
@@ -1963,7 +1974,8 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
     distraction_files: list of Path objects for generated distraction JSONs.
     distraction_chance: float in [0,1] - probability of inserting one distraction
                         file between each pair of folder transitions.
-    is_click_sensitive: if True, skip cursor pathing between files (no coord changes).
+    is_click_sensitive: if True, skip jitter and idle wandering only. Cursor
+                        transition still runs (position accuracy preserved).
     """
     
     def add_file_to_cycle(file_path, folder_num, is_dmwm, file_label,
@@ -2058,6 +2070,9 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
         _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
         _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
+        _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling — no single no-input
+                                           # window may exceed this after all multipliers.
+                                           # Applied at every pause generation point.
 
         rapid_protected       = set()   # strict rapid-click indices
         soft_double_protected = set()   # soft double-click indices (MM drift between)
@@ -2249,10 +2264,10 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     break
             
             
-            # CURSOR TRANSITION: skipped if THIS slot or the whole cycle is click-sensitive.
+            # CURSOR TRANSITION: runs for all folders including click-sensitive.
             # slot_is_click_sensitive: transition TO this specific subfolder is suppressed.
-            # is_click_sensitive: whole-cycle flag (main folder name tag).
-            if not is_click_sensitive and not slot_is_click_sensitive:
+            # is_click_sensitive: only suppresses jitter + idle (NOT transition).
+            if not slot_is_click_sensitive:
                 transition_duration = rng.uniform(200.0, 400.0) * mult
                 if last_x is not None and first_x is not None and (last_x != first_x or last_y != first_y):
                     transition_path = generate_human_path(
@@ -3018,7 +3033,7 @@ def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
     # directly between recorded events rather than only making buffers longer.
     # Duration: rng.uniform(200, 800) * mult ms. Skipped for raw + click-sensitive.
     if not is_raw and not is_click_sensitive and rng.random() < 0.50:
-        _mid_ms = rng.uniform(200.0, 800.0) * mult
+        _mid_ms = min(rng.uniform(200.0, 800.0) * mult, _MAX_SINGLE_PAUSE_MS)
         _drag_idx = build_drag_index_set(events_with_pauses)
         _p_set = set()
         for _s, _e in protected_ranges:
@@ -4607,7 +4622,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.14"
+VERSION = "v3.19.15"
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -5857,7 +5872,7 @@ def insert_intra_file_pauses(events: list, rng: random.Random,
         return events, 0, float('inf')
 
     # Float ms - no rounding
-    pause_duration = file_duration_ms * pct
+    pause_duration = min(file_duration_ms * pct, _MAX_SINGLE_PAUSE_MS)
 
     protected_set = set()
     for s, e in protected_ranges:
@@ -6240,7 +6255,7 @@ def insert_massive_pause(events: list, rng: random.Random, mult: float = 1.0) ->
         return events, 0, 0
     
     # Generate massive pause: 4-7 minutes (240000-420000ms) x multiplier
-    pause_duration = int(rng.uniform(240000.0, 420000.0))  # no mult — flat 4-7 min
+    pause_duration = min(int(rng.uniform(240000.0, 420000.0)), _MAX_SINGLE_PAUSE_MS)  # no mult — flat 4-7 min, hard cap applied
     
     # Detect protected ranges (rapid clicks, double-clicks)
     protected_ranges = detect_rapid_click_sequences(events)
@@ -6298,7 +6313,8 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
     distraction_files: list of Path objects for generated distraction JSONs.
     distraction_chance: float in [0,1] - probability of inserting one distraction
                         file between each pair of folder transitions.
-    is_click_sensitive: if True, skip cursor pathing between files (no coord changes).
+    is_click_sensitive: if True, skip jitter and idle wandering only. Cursor
+                        transition still runs (position accuracy preserved).
     """
     
     def add_file_to_cycle(file_path, folder_num, is_dmwm, file_label,
@@ -6393,6 +6409,9 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
         _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
         _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
+        _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling — no single no-input
+                                           # window may exceed this after all multipliers.
+                                           # Applied at every pause generation point.
 
         rapid_protected       = set()   # strict rapid-click indices
         soft_double_protected = set()   # soft double-click indices (MM drift between)
@@ -6584,10 +6603,10 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     break
             
             
-            # CURSOR TRANSITION: skipped if THIS slot or the whole cycle is click-sensitive.
+            # CURSOR TRANSITION: runs for all folders including click-sensitive.
             # slot_is_click_sensitive: transition TO this specific subfolder is suppressed.
-            # is_click_sensitive: whole-cycle flag (main folder name tag).
-            if not is_click_sensitive and not slot_is_click_sensitive:
+            # is_click_sensitive: only suppresses jitter + idle (NOT transition).
+            if not slot_is_click_sensitive:
                 transition_duration = rng.uniform(200.0, 400.0) * mult
                 if last_x is not None and first_x is not None and (last_x != first_x or last_y != first_y):
                     transition_path = generate_human_path(
@@ -7353,7 +7372,7 @@ def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
     # directly between recorded events rather than only making buffers longer.
     # Duration: rng.uniform(200, 800) * mult ms. Skipped for raw + click-sensitive.
     if not is_raw and not is_click_sensitive and rng.random() < 0.50:
-        _mid_ms = rng.uniform(200.0, 800.0) * mult
+        _mid_ms = min(rng.uniform(200.0, 800.0) * mult, _MAX_SINGLE_PAUSE_MS)
         _drag_idx = build_drag_index_set(events_with_pauses)
         _p_set = set()
         for _s, _e in protected_ranges:
@@ -9170,7 +9189,7 @@ def main():
                     if file_duration >= 25000:
                         # INEFFICIENT Before File Pause: 10-30 seconds (10000-30000ms)
                         # Random, not rounded, no multiplier applied
-                        inter_cycle_pause = int(rng.uniform(10000.0, 30000.0))
+                        inter_cycle_pause = min(int(rng.uniform(10000.0, 30000.0)), _MAX_SINGLE_PAUSE_MS)
                         total_inter += inter_cycle_pause
 
                     # Add slow cursor drift covering the full inef pause.
