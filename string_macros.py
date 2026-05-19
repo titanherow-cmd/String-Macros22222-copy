@@ -893,6 +893,7 @@ import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
 VERSION = "v3.19.15"
+_MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -2070,9 +2071,6 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
         _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
         _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
-        _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling — no single no-input
-                                           # window may exceed this after all multipliers.
-                                           # Applied at every pause generation point.
 
         rapid_protected       = set()   # strict rapid-click indices
         soft_double_protected = set()   # soft double-click indices (MM drift between)
@@ -4623,6 +4621,7 @@ import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
 VERSION = "v3.19.15"
+_MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
@@ -6409,9 +6408,6 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
         _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
         _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
-        _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling — no single no-input
-                                           # window may exceed this after all multipliers.
-                                           # Applied at every pause generation point.
 
         rapid_protected       = set()   # strict rapid-click indices
         soft_double_protected = set()   # soft double-click indices (MM drift between)
