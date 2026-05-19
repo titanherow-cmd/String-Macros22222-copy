@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.15
+  Current version: v3.19.16
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -273,12 +273,11 @@ STRING MACROS - FEATURE LIST
 40. LOGOUT SEQUENCE FOLDER (Feature 40)
     Trigger: folder named 'LOGOUT, wait, in' (case-insensitive) at the root
     level of input_macros/.
-    Contents: exactly 3 .json files identified by keyword in filename:
-      - File containing 'proper'  → slot 1: actual logout actions
-      - File containing 'nothing' → slot 2: idle wait period
-      - File containing 'relogin' → slot 3: re-login actions
-    Stringing order: slot1 → 500-800ms buffer → slot2 → RANDOM WAIT →
-                     500-800ms buffer → slot3
+    Contents: .json files assigned by numeric prefix in filename.
+      Files assigned by numeric prefix in filename (e.g. '1- logout.json' → slot 1).
+      Sub-slots supported (e.g. '1.1-' sorts between 1 and 2).
+      Random wait fires after the last file whose prefix is 2.x.
+      Any number of slots supported; minimum: one pre-2, one 2.x, one post-2.
     Two break files built per output folder (each with a fresh random wait):
     Long break:  7200000–16200000 ms (2h–4.5h)
     Short break: 1800000– 5400000 ms (30min–90min)
@@ -312,12 +311,11 @@ STRING MACROS - FEATURE LIST
     A [Pool] log line is printed for each merge: "F2: merged 'name' (N files total)"
     Trigger: folder named 'LOGOUT, wait, in' (case-insensitive) at the root
     level of input_macros/.
-    Contents: exactly 3 .json files identified by keyword in filename:
-      - File containing 'proper'  → slot 1: actual logout actions
-      - File containing 'nothing' → slot 2: idle wait period
-      - File containing 'relogin' → slot 3: re-login actions
-    Stringing order: slot1 → 500-800ms buffer → slot2 → RANDOM WAIT →
-                     500-800ms buffer → slot3
+    Contents: .json files assigned by numeric prefix in filename.
+      Files assigned by numeric prefix in filename (e.g. '1- logout.json' → slot 1).
+      Sub-slots supported (e.g. '1.1-' sorts between 1 and 2).
+      Random wait fires after the last file whose prefix is 2.x.
+      Any number of slots supported; minimum: one pre-2, one 2.x, one post-2.
     Two break files built per output folder (each with a fresh random wait):
     Long break:  7200000–16200000 ms (2h–4.5h)
     Short break: 1800000– 5400000 ms (30min–90min)
@@ -394,6 +392,14 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.16: build_logout_sequence now assigns slots by numeric filename
+            prefix (e.g. '2- file.json' -> slot 2.0) instead of keywords
+            ('proper', 'nothing', 'relogin'). Sub-slots like '1.1-' sort
+            naturally between neighbours, mirroring F-folder numbering.
+            Any number of slots supported. Random wait always fires after
+            the last 2.x slot. Validation requires at least one pre-2,
+            one 2.x, and one post-2 file. Duplicate slot numbers log a
+            warning and keep the first match.
 - v3.19.15: Added _MAX_SINGLE_PAUSE_MS = 1,536,000ms (25.6 min) hard cap.
             Applied via min() at all 4 pause generation points: intra-file
             % pause, massive pause, mid-event pause, before-file pause.
@@ -892,7 +898,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.15"
+VERSION = "v3.19.16"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -3715,23 +3721,23 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
     """
     Build a strung logout sequence from the 'LOGOUT, wait, in' folder (Feature 40).
 
-    Expected files inside the folder (matched by keyword in filename,
-    case-insensitive):
-      - filename contains 'proper'  -> slot 1: actual logout actions (played first)
-      - filename contains 'nothing' -> slot 2: idle file, receives random wait
-      - filename contains 'relogin' -> slot 3: re-login actions (played last)
+    Files inside the folder are assigned to slots by their NUMERIC PREFIX:
+      0-   first slot  (runs before the wait block)
+      1-   second slot
+      1.1- sub-slot between 1 and 2 (sorted naturally)
+      2-   WAIT SLOT: random break duration is appended after this file plays
+      2.1- additional sub-slot in the 2.x range (also before the wait fires)
+      3-   first slot after the wait
+      4-   etc.
 
-    Stringing order:
-      slot1 -> pre-play buffer (500-800 ms) -> slot2 -> RANDOM WAIT
-           -> pre-play buffer (500-800 ms) -> slot3
+    Any number of slots is supported. Sub-slots like 1.1, 2.5 sort between
+    their neighbours exactly as F-subfolder numbers do.
 
-    Random wait: drawn from wait_range_ms (float ms, never rounded).
-    Default long break: 7200000–16200000 ms (2h–4.5h).
-    Short break call:   1800000– 5400000 ms (30min–90min).
+    Random wait is inserted after the LAST file whose number is >= 2 and < 3.
+    A 500-800ms buffer is placed between every adjacent pair of slots.
 
-    No anti-detection features applied. filter_problematic_keys() runs on load.
-    Writes to out_path; caller should name it '- logout.json' so the existing
-    copy-naming logic in main() produces '@ N LOGOUT.JSON' unchanged.
+    Required: at least one file with num < 2, one with 2 <= num < 3,
+              one with num >= 3.
 
     Returns out_path on success, None on failure.
     """
@@ -3740,46 +3746,54 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
         print(f"  [!] LOGOUT folder has no .json files — logout skipped")
         return None
 
-    # Identify 3-5 slots by keyword in filename (case-insensitive).
-    # Slots 0 and 4 are OPTIONAL — old 3-file folders still work unchanged.
-    #   slot 0: close bank before logout   (name contains 'close' or starts with '0-')
-    #   slot 1: actual logout actions       (name contains 'proper')
-    #   slot 2: idle wait period            (name contains 'nothing')
-    #   slot 3: re-login actions            (name contains 'relogin')
-    #   slot 4: open bank after re-login    (name contains 'open'  or starts with '4-')
-    slot0 = slot1 = slot2 = slot3 = slot4 = None
+    # --- Parse slot numbers from filename prefix (e.g. "2- file.json" -> 2.0) ---
+    def _slot_num(filename):
+        m = re.match(r'^(\d+(?:\.\d+)?)\s*[-\s]', filename.lower())
+        return float(m.group(1)) if m else None
+
+    numbered = {}   # float -> Path
+    skipped  = []
     for f in json_files:
-        n = f.name.lower()
-        if 'proper' in n:
-            slot1 = f
-        elif 'nothing' in n:
-            slot2 = f
-        elif 'relogin' in n:
-            slot3 = f
-        elif 'close' in n or n.startswith('0-') or n.startswith('0 '):
-            slot0 = f
-        elif 'open' in n or n.startswith('4-') or n.startswith('4 '):
-            slot4 = f
+        n = _slot_num(f.name)
+        if n is not None:
+            if n in numbered:
+                print(f"  [!] LOGOUT: duplicate slot {n} — keeping {numbered[n].name}, skipping {f.name}")
+            else:
+                numbered[n] = f
+        else:
+            skipped.append(f.name)
+
+    if skipped:
+        print(f"  [!] LOGOUT: no numeric prefix found, skipped: {skipped}")
+
+    if not numbered:
+        print(f"  [!] LOGOUT folder: no numbered files found — logout skipped")
+        return None
+
+    sorted_nums = sorted(numbered.keys())
+
+    # Validate: need at least one slot before 2, one 2.x slot, one after 2
+    pre_wait  = [n for n in sorted_nums if n < 2.0]
+    wait_nums = [n for n in sorted_nums if 2.0 <= n < 3.0]
+    post_wait = [n for n in sorted_nums if n >= 3.0]
 
     missing = []
-    if slot1 is None:
-        missing.append("slot-1 logout (filename must contain 'proper')")
-    if slot2 is None:
-        missing.append("slot-2 wait (filename must contain 'nothing')")
-    if slot3 is None:
-        missing.append("slot-3 login (filename must contain 'relogin')")
+    if not pre_wait:
+        missing.append("at least one file with prefix < 2 (e.g. '1- ')")
+    if not wait_nums:
+        missing.append("at least one file with prefix 2.x (e.g. '2- ')")
+    if not post_wait:
+        missing.append("at least one file with prefix >= 3 (e.g. '3- ')")
     if missing:
-        print(f"  [!] LOGOUT folder: cannot identify: {'; '.join(missing)}")
-        print(f"      Found files: {[f.name for f in json_files]}")
+        print(f"  [!] LOGOUT folder missing: {'; '.join(missing)}")
+        print(f"      Found slots: {sorted_nums}")
         print(f"      Logout skipped.")
         return None
 
-    if slot0:
-        print(f"  LOGOUT: slot 0 (close bank): {slot0.name}")
-    if slot4:
-        print(f"  LOGOUT: slot 4 (open bank):  {slot4.name}")
+    # The random wait fires after the LAST 2.x slot
+    wait_after_num = max(wait_nums)
 
-    # Load and normalise each file (time base = 0)
+    # --- Load all slots ---
     def _load(path):
         try:
             events = json.load(open(path, encoding='utf-8'))
@@ -3794,20 +3808,18 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
         base = min(e.get('Time', 0) for e in events)
         return [{**e, 'Time': e['Time'] - base} for e in events]
 
-    e0 = _load(slot0) if slot0 else None
-    e1 = _load(slot1)
-    e2 = _load(slot2)
-    e3 = _load(slot3)
-    e4 = _load(slot4) if slot4 else None
+    loaded = {}
+    for num in sorted_nums:
+        evts = _load(numbered[num])
+        if not evts:
+            print(f"  [!] LOGOUT: slot {num} ({numbered[num].name}) empty after load — logout skipped")
+            return None
+        loaded[num] = evts
 
-    if not e1 or not e2 or not e3:
-        print(f"  [!] LOGOUT: one or more required files empty after load — logout skipped")
-        return None
-
-    # String: [slot0 →] slot1 → slot2 → random_wait → slot3 [→ slot4]
-    # Slots 0 and 4 are optional; 500-800ms pre-play buffer between each slot.
+    # --- String all slots in numerical order ---
     merged   = []
     timeline = 0.0
+    random_wait_ms = 0.0
 
     def _append_slot(evts):
         nonlocal timeline
@@ -3816,41 +3828,23 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
             merged.append({**e, 'Time': e['Time'] + timeline})
         timeline += dur
 
-    # Slot 0 (optional: close bank)
-    if e0:
-        _append_slot(e0)
-        timeline += rng.uniform(500.0, 800.0)
+    for i, num in enumerate(sorted_nums):
+        _append_slot(loaded[num])
 
-    # Slot 1 (logout)
-    _append_slot(e1)
+        if num == wait_after_num:
+            # Random wait immediately after the last 2.x slot
+            random_wait_ms = rng.uniform(*wait_range_ms)
+            timeline += random_wait_ms
 
-    # Pre-play buffer 1->2
-    timeline += rng.uniform(500.0, 800.0)
+        # 500-800ms buffer after every slot except the last
+        if i < len(sorted_nums) - 1:
+            timeline += rng.uniform(500.0, 800.0)
 
-    # Slot 2 (idle wait)
-    _append_slot(e2)
-
-    # Random wait: drawn from wait_range_ms — float ms, never rounded
-    random_wait_ms = rng.uniform(*wait_range_ms)
-    timeline += random_wait_ms
-
-    # Pre-play buffer 2->3
-    timeline += rng.uniform(500.0, 800.0)
-
-    # Slot 3 (re-login)
-    _append_slot(e3)
-
-    # Slot 4 (optional: open bank)
-    if e4:
-        timeline += rng.uniform(500.0, 800.0)
-        _append_slot(e4)
-
-    # Finalise: round times to int, sort
+    # --- Finalise ---
     for e in merged:
         e['Time'] = max(0, int(round(e['Time'])))
     merged.sort(key=lambda e: e.get('Time', 0))
 
-    # Write to disk
     try:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(merged, separators=(',', ':')))
@@ -3858,16 +3852,15 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
         print(f"  [!] LOGOUT: failed to write strung file: {exc}")
         return None
 
-    total_min  = int(timeline / 60000)
-    total_sec  = int((timeline % 60000) / 1000)
-    wait_min   = int(random_wait_ms / 60000)
-    wait_sec   = int((random_wait_ms % 60000) / 1000)
-    print(f"  Built LOGOUT sequence ({2 + bool(slot0) + bool(slot4)}-slot):")
-    if slot0: print(f"    0. {slot0.name}")
-    print(f"    1. {slot1.name}")
-    print(f"    2. {slot2.name}  (+{wait_min}m {wait_sec}s random wait)")
-    print(f"    3. {slot3.name}")
-    if slot4: print(f"    4. {slot4.name}")
+    total_min = int(timeline / 60000)
+    total_sec = int((timeline % 60000) / 1000)
+    wait_min  = int(random_wait_ms / 60000)
+    wait_sec  = int((random_wait_ms % 60000) / 1000)
+
+    print(f"  Built LOGOUT sequence ({len(sorted_nums)}-slot):")
+    for num in sorted_nums:
+        suffix = f"  (+{wait_min}m {wait_sec}s random wait)" if num == wait_after_num else ""
+        print(f"    {num}. {numbered[num].name}{suffix}")
     print(f"    Total duration: {total_min}m {total_sec}s  |  written -> {out_path.name}")
     return out_path
 
@@ -4620,7 +4613,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.15"
+VERSION = "v3.19.16"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -8052,23 +8045,23 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
     """
     Build a strung logout sequence from the 'LOGOUT, wait, in' folder (Feature 40).
 
-    Expected files inside the folder (matched by keyword in filename,
-    case-insensitive):
-      - filename contains 'proper'  -> slot 1: actual logout actions (played first)
-      - filename contains 'nothing' -> slot 2: idle file, receives random wait
-      - filename contains 'relogin' -> slot 3: re-login actions (played last)
+    Files inside the folder are assigned to slots by their NUMERIC PREFIX:
+      0-   first slot  (runs before the wait block)
+      1-   second slot
+      1.1- sub-slot between 1 and 2 (sorted naturally)
+      2-   WAIT SLOT: random break duration is appended after this file plays
+      2.1- additional sub-slot in the 2.x range (also before the wait fires)
+      3-   first slot after the wait
+      4-   etc.
 
-    Stringing order:
-      slot1 -> pre-play buffer (500-800 ms) -> slot2 -> RANDOM WAIT
-           -> pre-play buffer (500-800 ms) -> slot3
+    Any number of slots is supported. Sub-slots like 1.1, 2.5 sort between
+    their neighbours exactly as F-subfolder numbers do.
 
-    Random wait: drawn from wait_range_ms (float ms, never rounded).
-    Default long break: 7200000–16200000 ms (2h–4.5h).
-    Short break call:   1800000– 5400000 ms (30min–90min).
+    Random wait is inserted after the LAST file whose number is >= 2 and < 3.
+    A 500-800ms buffer is placed between every adjacent pair of slots.
 
-    No anti-detection features applied. filter_problematic_keys() runs on load.
-    Writes to out_path; caller should name it '- logout.json' so the existing
-    copy-naming logic in main() produces '@ N LOGOUT.JSON' unchanged.
+    Required: at least one file with num < 2, one with 2 <= num < 3,
+              one with num >= 3.
 
     Returns out_path on success, None on failure.
     """
@@ -8077,46 +8070,54 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
         print(f"  [!] LOGOUT folder has no .json files — logout skipped")
         return None
 
-    # Identify 3-5 slots by keyword in filename (case-insensitive).
-    # Slots 0 and 4 are OPTIONAL — old 3-file folders still work unchanged.
-    #   slot 0: close bank before logout   (name contains 'close' or starts with '0-')
-    #   slot 1: actual logout actions       (name contains 'proper')
-    #   slot 2: idle wait period            (name contains 'nothing')
-    #   slot 3: re-login actions            (name contains 'relogin')
-    #   slot 4: open bank after re-login    (name contains 'open'  or starts with '4-')
-    slot0 = slot1 = slot2 = slot3 = slot4 = None
+    # --- Parse slot numbers from filename prefix (e.g. "2- file.json" -> 2.0) ---
+    def _slot_num(filename):
+        m = re.match(r'^(\d+(?:\.\d+)?)\s*[-\s]', filename.lower())
+        return float(m.group(1)) if m else None
+
+    numbered = {}   # float -> Path
+    skipped  = []
     for f in json_files:
-        n = f.name.lower()
-        if 'proper' in n:
-            slot1 = f
-        elif 'nothing' in n:
-            slot2 = f
-        elif 'relogin' in n:
-            slot3 = f
-        elif 'close' in n or n.startswith('0-') or n.startswith('0 '):
-            slot0 = f
-        elif 'open' in n or n.startswith('4-') or n.startswith('4 '):
-            slot4 = f
+        n = _slot_num(f.name)
+        if n is not None:
+            if n in numbered:
+                print(f"  [!] LOGOUT: duplicate slot {n} — keeping {numbered[n].name}, skipping {f.name}")
+            else:
+                numbered[n] = f
+        else:
+            skipped.append(f.name)
+
+    if skipped:
+        print(f"  [!] LOGOUT: no numeric prefix found, skipped: {skipped}")
+
+    if not numbered:
+        print(f"  [!] LOGOUT folder: no numbered files found — logout skipped")
+        return None
+
+    sorted_nums = sorted(numbered.keys())
+
+    # Validate: need at least one slot before 2, one 2.x slot, one after 2
+    pre_wait  = [n for n in sorted_nums if n < 2.0]
+    wait_nums = [n for n in sorted_nums if 2.0 <= n < 3.0]
+    post_wait = [n for n in sorted_nums if n >= 3.0]
 
     missing = []
-    if slot1 is None:
-        missing.append("slot-1 logout (filename must contain 'proper')")
-    if slot2 is None:
-        missing.append("slot-2 wait (filename must contain 'nothing')")
-    if slot3 is None:
-        missing.append("slot-3 login (filename must contain 'relogin')")
+    if not pre_wait:
+        missing.append("at least one file with prefix < 2 (e.g. '1- ')")
+    if not wait_nums:
+        missing.append("at least one file with prefix 2.x (e.g. '2- ')")
+    if not post_wait:
+        missing.append("at least one file with prefix >= 3 (e.g. '3- ')")
     if missing:
-        print(f"  [!] LOGOUT folder: cannot identify: {'; '.join(missing)}")
-        print(f"      Found files: {[f.name for f in json_files]}")
+        print(f"  [!] LOGOUT folder missing: {'; '.join(missing)}")
+        print(f"      Found slots: {sorted_nums}")
         print(f"      Logout skipped.")
         return None
 
-    if slot0:
-        print(f"  LOGOUT: slot 0 (close bank): {slot0.name}")
-    if slot4:
-        print(f"  LOGOUT: slot 4 (open bank):  {slot4.name}")
+    # The random wait fires after the LAST 2.x slot
+    wait_after_num = max(wait_nums)
 
-    # Load and normalise each file (time base = 0)
+    # --- Load all slots ---
     def _load(path):
         try:
             events = json.load(open(path, encoding='utf-8'))
@@ -8131,20 +8132,18 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
         base = min(e.get('Time', 0) for e in events)
         return [{**e, 'Time': e['Time'] - base} for e in events]
 
-    e0 = _load(slot0) if slot0 else None
-    e1 = _load(slot1)
-    e2 = _load(slot2)
-    e3 = _load(slot3)
-    e4 = _load(slot4) if slot4 else None
+    loaded = {}
+    for num in sorted_nums:
+        evts = _load(numbered[num])
+        if not evts:
+            print(f"  [!] LOGOUT: slot {num} ({numbered[num].name}) empty after load — logout skipped")
+            return None
+        loaded[num] = evts
 
-    if not e1 or not e2 or not e3:
-        print(f"  [!] LOGOUT: one or more required files empty after load — logout skipped")
-        return None
-
-    # String: [slot0 →] slot1 → slot2 → random_wait → slot3 [→ slot4]
-    # Slots 0 and 4 are optional; 500-800ms pre-play buffer between each slot.
+    # --- String all slots in numerical order ---
     merged   = []
     timeline = 0.0
+    random_wait_ms = 0.0
 
     def _append_slot(evts):
         nonlocal timeline
@@ -8153,41 +8152,23 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
             merged.append({**e, 'Time': e['Time'] + timeline})
         timeline += dur
 
-    # Slot 0 (optional: close bank)
-    if e0:
-        _append_slot(e0)
-        timeline += rng.uniform(500.0, 800.0)
+    for i, num in enumerate(sorted_nums):
+        _append_slot(loaded[num])
 
-    # Slot 1 (logout)
-    _append_slot(e1)
+        if num == wait_after_num:
+            # Random wait immediately after the last 2.x slot
+            random_wait_ms = rng.uniform(*wait_range_ms)
+            timeline += random_wait_ms
 
-    # Pre-play buffer 1->2
-    timeline += rng.uniform(500.0, 800.0)
+        # 500-800ms buffer after every slot except the last
+        if i < len(sorted_nums) - 1:
+            timeline += rng.uniform(500.0, 800.0)
 
-    # Slot 2 (idle wait)
-    _append_slot(e2)
-
-    # Random wait: drawn from wait_range_ms — float ms, never rounded
-    random_wait_ms = rng.uniform(*wait_range_ms)
-    timeline += random_wait_ms
-
-    # Pre-play buffer 2->3
-    timeline += rng.uniform(500.0, 800.0)
-
-    # Slot 3 (re-login)
-    _append_slot(e3)
-
-    # Slot 4 (optional: open bank)
-    if e4:
-        timeline += rng.uniform(500.0, 800.0)
-        _append_slot(e4)
-
-    # Finalise: round times to int, sort
+    # --- Finalise ---
     for e in merged:
         e['Time'] = max(0, int(round(e['Time'])))
     merged.sort(key=lambda e: e.get('Time', 0))
 
-    # Write to disk
     try:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(merged, separators=(',', ':')))
@@ -8195,16 +8176,15 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
         print(f"  [!] LOGOUT: failed to write strung file: {exc}")
         return None
 
-    total_min  = int(timeline / 60000)
-    total_sec  = int((timeline % 60000) / 1000)
-    wait_min   = int(random_wait_ms / 60000)
-    wait_sec   = int((random_wait_ms % 60000) / 1000)
-    print(f"  Built LOGOUT sequence ({2 + bool(slot0) + bool(slot4)}-slot):")
-    if slot0: print(f"    0. {slot0.name}")
-    print(f"    1. {slot1.name}")
-    print(f"    2. {slot2.name}  (+{wait_min}m {wait_sec}s random wait)")
-    print(f"    3. {slot3.name}")
-    if slot4: print(f"    4. {slot4.name}")
+    total_min = int(timeline / 60000)
+    total_sec = int((timeline % 60000) / 1000)
+    wait_min  = int(random_wait_ms / 60000)
+    wait_sec  = int((random_wait_ms % 60000) / 1000)
+
+    print(f"  Built LOGOUT sequence ({len(sorted_nums)}-slot):")
+    for num in sorted_nums:
+        suffix = f"  (+{wait_min}m {wait_sec}s random wait)" if num == wait_after_num else ""
+        print(f"    {num}. {numbered[num].name}{suffix}")
     print(f"    Total duration: {total_min}m {total_sec}s  |  written -> {out_path.name}")
     return out_path
 
