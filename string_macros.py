@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.16
+  Current version: v3.19.17
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,16 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.17: insert_intra_file_pauses now excludes pause points within
+            +-1000ms of any MouseWheel event (_MW_EXCL_MS = 1000ms).
+            ROOT CAUSE: MouseWheel events had no exclusion zone protection.
+            Pauses could land in gaps immediately before scroll sequences,
+            desynchronising timed scrolling from in-game states (inventory
+            page, interface selection). DragStart/click exclusion zones
+            already existed but did not cover wheel events.
+            Uses bisect for O(n log m) filtering — zero cost for files
+            with no scroll events.
+            Applied to both copies.
 - v3.19.16: build_logout_sequence now assigns slots by numeric filename
             prefix (e.g. '2- file.json' -> slot 2.0) instead of keywords
             ('proper', 'nothing', 'relogin'). Sub-slots like '1.1-' sort
@@ -898,7 +908,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.16"
+VERSION = "v3.19.17"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -1546,12 +1556,34 @@ def insert_intra_file_pauses(events: list, rng: random.Random,
     # press/release event. This prevents pauses landing between LeftDown and
     # LeftUp (which would stretch the click hold) or just before a click press.
     _PRESS_TYPES = {'DragStart', 'LeftDown', 'LeftUp', 'RightDown', 'RightUp', 'Click'}
+
+    # Build MouseWheel exclusion list — pauses must not land within
+    # _MW_EXCL_MS of any scroll event. Scroll sequences are timed to
+    # specific in-game states; a pause before or during them desynchronises
+    # the scroll from whatever it's responding to (inventory page, interface).
+    _MW_EXCL_MS = 1000
+    import bisect
+    _mw_times = sorted(
+        e.get('Time', 0) for e in events if e.get('Type') == 'MouseWheel'
+    )
+
+    def _near_mw(t):
+        if not _mw_times:
+            return False
+        pos = bisect.bisect_left(_mw_times, t)
+        if pos > 0 and t - _mw_times[pos - 1] <= _MW_EXCL_MS:
+            return True
+        if pos < len(_mw_times) and _mw_times[pos] - t <= _MW_EXCL_MS:
+            return True
+        return False
+
     valid = [
         idx for idx in range(first_safe, last_safe)
         if idx not in protected_set
         and idx not in drag_indices
         and events[idx].get('Type') not in _PRESS_TYPES
         and (idx + 1 >= len(events) or events[idx + 1].get('Type') not in _PRESS_TYPES)
+        and not _near_mw(events[idx].get('Time', 0))
     ]
 
     if not valid:
@@ -4613,7 +4645,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.16"
+VERSION = "v3.19.17"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -5879,12 +5911,34 @@ def insert_intra_file_pauses(events: list, rng: random.Random,
     # press/release event. This prevents pauses landing between LeftDown and
     # LeftUp (which would stretch the click hold) or just before a click press.
     _PRESS_TYPES = {'DragStart', 'LeftDown', 'LeftUp', 'RightDown', 'RightUp', 'Click'}
+
+    # Build MouseWheel exclusion list — pauses must not land within
+    # _MW_EXCL_MS of any scroll event. Scroll sequences are timed to
+    # specific in-game states; a pause before or during them desynchronises
+    # the scroll from whatever it's responding to (inventory page, interface).
+    _MW_EXCL_MS = 1000
+    import bisect
+    _mw_times = sorted(
+        e.get('Time', 0) for e in events if e.get('Type') == 'MouseWheel'
+    )
+
+    def _near_mw(t):
+        if not _mw_times:
+            return False
+        pos = bisect.bisect_left(_mw_times, t)
+        if pos > 0 and t - _mw_times[pos - 1] <= _MW_EXCL_MS:
+            return True
+        if pos < len(_mw_times) and _mw_times[pos] - t <= _MW_EXCL_MS:
+            return True
+        return False
+
     valid = [
         idx for idx in range(first_safe, last_safe)
         if idx not in protected_set
         and idx not in drag_indices
         and events[idx].get('Type') not in _PRESS_TYPES
         and (idx + 1 >= len(events) or events[idx + 1].get('Type') not in _PRESS_TYPES)
+        and not _near_mw(events[idx].get('Time', 0))
     ]
 
     if not valid:
