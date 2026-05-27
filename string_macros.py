@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.17
+  Current version: v3.19.18
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,18 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.18: Raised Part A _ZERO_GAP_THRESHOLD from 30ms to 35ms.
+            ROOT CAUSE: DS events with 30-34ms MM->click gaps slipped
+            through Part A undetected. At 33ms the cursor may still be
+            in micro-deceleration when the click fires, causing 1-2px
+            tile misses in strung playback (observed in FMF_SmthAlch
+            DS[599] at (942,327) with 33ms gap - 3ms above old threshold).
+            Standalone playback was unaffected because the physical mouse
+            naturally settled within the recording's timing.
+            _ZERO_GAP_TARGET remains 35ms - threshold now equals target,
+            so all gaps in [0,35) are uniformly shifted to 35ms with a
+            settling MM at the click's exact coordinates.
+            Applied to both copies.
 - v3.19.17: insert_intra_file_pauses now excludes pause points within
             +-1000ms of any MouseWheel event (_MW_EXCL_MS = 1000ms).
             ROOT CAUSE: MouseWheel events had no exclusion zone protection.
@@ -908,7 +920,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.17"
+VERSION = "v3.19.18"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -2072,7 +2084,10 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # any click with < 30ms since the last cursor movement is shifted to
         # 35ms after that MM, giving the macro player time to register the
         # cursor at its settled position before the click fires.
-        _ZERO_GAP_THRESHOLD  = 30   # ms - gaps below this = cursor still moving
+        _ZERO_GAP_THRESHOLD  = 35   # ms - gaps below this = cursor still moving
+                                     # Raised from 30: catches borderline 30-34ms
+                                     # cases (e.g. 33ms approach) where cursor may
+                                     # not have fully settled before click fires.
         _ZERO_GAP_TARGET     = 35   # ms - minimum settle time to enforce
         _SETTLE_BEFORE_CLICK = 15   # ms - settling MM lands this many ms before click
         for _zi in range(1, len(events)):
@@ -4645,7 +4660,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.17"
+VERSION = "v3.19.18"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -6418,7 +6433,10 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # any click with < 30ms since the last cursor movement is shifted to
         # 35ms after that MM, giving the macro player time to register the
         # cursor at its settled position before the click fires.
-        _ZERO_GAP_THRESHOLD  = 30   # ms - gaps below this = cursor still moving
+        _ZERO_GAP_THRESHOLD  = 35   # ms - gaps below this = cursor still moving
+                                     # Raised from 30: catches borderline 30-34ms
+                                     # cases (e.g. 33ms approach) where cursor may
+                                     # not have fully settled before click fires.
         _ZERO_GAP_TARGET     = 35   # ms - minimum settle time to enforce
         _SETTLE_BEFORE_CLICK = 15   # ms - settling MM lands this many ms before click
         for _zi in range(1, len(events)):
