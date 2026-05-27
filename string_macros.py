@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.18
+  Current version: v3.19.19
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,18 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.19: insert_intra_file_pauses now excludes pause points within
+            +-2000ms of any RightDown or RightUp event (_RC_EXCL_MS=2000).
+            ROOT CAUSE: _PRESS_TYPES check only blocked pauses AT or
+            immediately BEFORE right-click events. No forward window
+            protection existed after RightUp, meaning a pause could land
+            in the RightUp->menu-selection-DragStart window if any gap
+            there reached 2000ms. Right-click sequences must play exactly
+            as recorded -- a pause mid-sequence delays cursor arrival at
+            the menu option, risking wrong selection or menu dismissal.
+            Pattern follows v3.19.17 MouseWheel exclusion architecture.
+            Files with no right-clicks are unaffected.
+            Applied to both copies.
 - v3.19.18: Raised Part A _ZERO_GAP_THRESHOLD from 30ms to 35ms.
             ROOT CAUSE: DS events with 30-34ms MM->click gaps slipped
             through Part A undetected. At 33ms the cursor may still be
@@ -920,7 +932,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.18"
+VERSION = "v3.19.19"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -1589,6 +1601,28 @@ def insert_intra_file_pauses(events: list, rng: random.Random,
             return True
         return False
 
+    # Right-click exclusion: pauses must not land within _RC_EXCL_MS of any
+    # RightDown or RightUp event. Right-click sequences (RightDown -> RightUp
+    # -> cursor moves to menu option -> DragStart) must play exactly as
+    # recorded. A pause inserted after RightUp but before the menu-selection
+    # DragStart delays cursor arrival at the menu option, potentially causing
+    # the wrong option to be selected or the menu to be dismissed.
+    _RC_EXCL_MS = 2000
+    _rc_times = sorted(
+        e.get('Time', 0) for e in events
+        if e.get('Type') in ('RightDown', 'RightUp')
+    )
+
+    def _near_rc(t):
+        if not _rc_times:
+            return False
+        pos = bisect.bisect_left(_rc_times, t)
+        if pos > 0 and t - _rc_times[pos - 1] <= _RC_EXCL_MS:
+            return True
+        if pos < len(_rc_times) and _rc_times[pos] - t <= _RC_EXCL_MS:
+            return True
+        return False
+
     valid = [
         idx for idx in range(first_safe, last_safe)
         if idx not in protected_set
@@ -1596,6 +1630,7 @@ def insert_intra_file_pauses(events: list, rng: random.Random,
         and events[idx].get('Type') not in _PRESS_TYPES
         and (idx + 1 >= len(events) or events[idx + 1].get('Type') not in _PRESS_TYPES)
         and not _near_mw(events[idx].get('Time', 0))
+        and not _near_rc(events[idx].get('Time', 0))
     ]
 
     if not valid:
@@ -4660,7 +4695,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.18"
+VERSION = "v3.19.19"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -5947,6 +5982,28 @@ def insert_intra_file_pauses(events: list, rng: random.Random,
             return True
         return False
 
+    # Right-click exclusion: pauses must not land within _RC_EXCL_MS of any
+    # RightDown or RightUp event. Right-click sequences (RightDown -> RightUp
+    # -> cursor moves to menu option -> DragStart) must play exactly as
+    # recorded. A pause inserted after RightUp but before the menu-selection
+    # DragStart delays cursor arrival at the menu option, potentially causing
+    # the wrong option to be selected or the menu to be dismissed.
+    _RC_EXCL_MS = 2000
+    _rc_times = sorted(
+        e.get('Time', 0) for e in events
+        if e.get('Type') in ('RightDown', 'RightUp')
+    )
+
+    def _near_rc(t):
+        if not _rc_times:
+            return False
+        pos = bisect.bisect_left(_rc_times, t)
+        if pos > 0 and t - _rc_times[pos - 1] <= _RC_EXCL_MS:
+            return True
+        if pos < len(_rc_times) and _rc_times[pos] - t <= _RC_EXCL_MS:
+            return True
+        return False
+
     valid = [
         idx for idx in range(first_safe, last_safe)
         if idx not in protected_set
@@ -5954,6 +6011,7 @@ def insert_intra_file_pauses(events: list, rng: random.Random,
         and events[idx].get('Type') not in _PRESS_TYPES
         and (idx + 1 >= len(events) or events[idx + 1].get('Type') not in _PRESS_TYPES)
         and not _near_mw(events[idx].get('Time', 0))
+        and not _near_rc(events[idx].get('Time', 0))
     ]
 
     if not valid:
