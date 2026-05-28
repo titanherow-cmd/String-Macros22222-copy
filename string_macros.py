@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.19
+  Current version: v3.19.20
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,19 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.20: New feature — skill-folder logout extension.
+            If the top level of a skill folder contains loose JSON files
+            with numeric prefixes (e.g. '5- cam and zoom adjust.json'),
+            those files are stitched in numerical order onto the end of
+            all logout-type files for that specific folder:
+              @ LOGOUT LONG BREAK.json
+              @ LOGOUT SHORT BREAK.json
+              @ 01234 Proper logout+wait+RELOGIN.json
+                 -> @ 012345 Proper logout+wait+RELOGIN.json (renamed)
+            Files without extras are unchanged. filter_problematic_keys
+            applied to each extra slot on load. 500-800ms buffer between
+            base and each extra slot. Name reflects actual slot sequence.
+            New helpers: scan_folder_slot_files, stitch_logout_extension.
 - v3.19.19: insert_intra_file_pauses now excludes pause points within
             +-2000ms of any RightDown or RightUp event (_RC_EXCL_MS=2000).
             ROOT CAUSE: _PRESS_TYPES check only blocked pauses AT or
@@ -932,7 +945,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.19"
+VERSION = "v3.19.20"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -3946,6 +3959,90 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
     print(f"    Total duration: {total_min}m {total_sec}s  |  written -> {out_path.name}")
     return out_path
 
+
+def scan_folder_slot_files(folder_path):
+    """
+    Scan the top level of folder_path for loose JSON files with a
+    numeric prefix (e.g. '5- cam and zoom.json' -> slot 5.0).
+    Sub-folders are ignored -- only direct .json children are checked.
+    Returns sorted list of (float_num, Path), ascending by number.
+    """
+    result = []
+    for _f in folder_path.glob('*.json'):
+        _m = re.match(r'^(\d+(?:\.\d+)?)\s*[-\s]', _f.name.lower())
+        if _m:
+            result.append((float(_m.group(1)), _f))
+    result.sort(key=lambda x: x[0])
+    return result
+
+
+def stitch_logout_extension(base_json_path, extra_sorted, rng):
+    """
+    Load base logout JSON and stitch extra numbered slot files onto the
+    end with 500-800ms buffers between them. filter_problematic_keys
+    is applied to each extra slot on load.
+
+    base_json_path : Path  - the base logout .json to extend
+    extra_sorted   : list of (float_num, Path) sorted ascending
+    rng            : RNG instance
+
+    Returns (merged_events, slot_suffix_str) on success,
+            (None, None) on failure.
+    slot_suffix_str is a compact string of the extra slot numbers
+    appended (e.g. slots 5 and 6 -> '56', slot 5.1 -> '5.1').
+    """
+    try:
+        _base_events = json.loads(base_json_path.read_text(encoding='utf-8'))
+    except Exception as _exc:
+        print(f"  [!] stitch_logout_extension: cannot load {base_json_path.name}: {_exc}")
+        return None, None
+
+    if not _base_events:
+        return None, None
+
+    _merged   = list(_base_events)
+    _timeline = max(e.get('Time', 0) for e in _merged)
+    _slot_ids = []
+
+    for _num, _path in extra_sorted:
+        try:
+            _evts = json.loads(_path.read_text(encoding='utf-8'))
+        except Exception as _exc:
+            print(f"  [!] stitch_logout_extension: cannot load {_path.name}: {_exc}")
+            continue
+        if not _evts:
+            continue
+
+        _evts = filter_problematic_keys(_evts)
+        if not _evts:
+            continue
+
+        # Normalise to zero base
+        _bt = min(e.get('Time', 0) for e in _evts)
+        _evts = [{**e, 'Time': e['Time'] - _bt} for e in _evts]
+
+        # Buffer gap
+        _timeline += int(rng.uniform(500.0, 800.0))
+
+        # Stitch
+        _dur = max(e.get('Time', 0) for e in _evts)
+        for e in _evts:
+            _merged.append({**e, 'Time': e['Time'] + _timeline})
+        _timeline += _dur
+
+        _label = str(int(_num)) if _num == int(_num) else str(_num)
+        _slot_ids.append(_label)
+        print(f"    + Stitched extra logout slot {_num}: {_path.name}")
+
+    if not _slot_ids:
+        return None, None
+
+    for e in _merged:
+        e['Time'] = max(0, int(round(e['Time'])))
+    _merged.sort(key=lambda e: e.get('Time', 0))
+
+    return _merged, ''.join(_slot_ids)
+
 def main():
     parser = argparse.ArgumentParser(description="String Macros v3.1.0")
     parser.add_argument("input_root", type=str)
@@ -4497,37 +4594,99 @@ def main():
             _short_built = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_short_p,
                 wait_range_ms=(1800000.0, 5400000.0))
-            if _long_built:
-                try:
-                    shutil.copy2(_long_built,  out_folder / "@ LOGOUT LONG BREAK.json")
-                    print(f"  Copied: @ LOGOUT LONG BREAK.json")
-                except Exception as _e:
-                    print(f"  [!] Error copying long break: {_e}")
-            if _short_built:
-                try:
-                    shutil.copy2(_short_built, out_folder / "@ LOGOUT SHORT BREAK.json")
-                    print(f"  Copied: @ LOGOUT SHORT BREAK.json")
-                except Exception as _e:
-                    print(f"  [!] Error copying short break: {_e}")
+            # --- Scan skill folder for extra logout slot files (5-, 6-, etc.) ---
+            _extra_logout = scan_folder_slot_files(search_base)
+            if _extra_logout:
+                print(f"  Extra logout slots found: {[_p.name for _,_p in _extra_logout]}")
 
-        # Copy fixed final logout files from REPO ROOT (one level above input_macros).
-        # These two files live at repo root, not inside input_macros/.
-        # Inserted into every strung folder completely unmodified — no features,
-        # no processing. @ replaces the leading - in the filename.
+            # Long break
+            if _long_built:
+                _lb_dest = out_folder / "@ LOGOUT LONG BREAK.json"
+                if _extra_logout:
+                    _lb_ext, _lb_suf = stitch_logout_extension(_long_built, _extra_logout, _fl_rng)
+                    if _lb_ext:
+                        try:
+                            _lb_dest.write_text(json.dumps(_lb_ext, separators=(',', ':')))
+                            print(f"  Stitched: @ LOGOUT LONG BREAK.json (+{_lb_suf})")
+                        except Exception as _e:
+                            print(f"  [!] Error writing stitched long break: {_e}")
+                    else:
+                        try:
+                            shutil.copy2(_long_built, _lb_dest)
+                            print(f"  Copied: @ LOGOUT LONG BREAK.json")
+                        except Exception as _e:
+                            print(f"  [!] Error copying long break: {_e}")
+                else:
+                    try:
+                        shutil.copy2(_long_built, _lb_dest)
+                        print(f"  Copied: @ LOGOUT LONG BREAK.json")
+                    except Exception as _e:
+                        print(f"  [!] Error copying long break: {_e}")
+
+            # Short break
+            if _short_built:
+                _sb_dest = out_folder / "@ LOGOUT SHORT BREAK.json"
+                if _extra_logout:
+                    _sb_ext, _sb_suf = stitch_logout_extension(_short_built, _extra_logout, _fl_rng)
+                    if _sb_ext:
+                        try:
+                            _sb_dest.write_text(json.dumps(_sb_ext, separators=(',', ':')))
+                            print(f"  Stitched: @ LOGOUT SHORT BREAK.json (+{_sb_suf})")
+                        except Exception as _e:
+                            print(f"  [!] Error writing stitched short break: {_e}")
+                    else:
+                        try:
+                            shutil.copy2(_short_built, _sb_dest)
+                            print(f"  Copied: @ LOGOUT SHORT BREAK.json")
+                        except Exception as _e:
+                            print(f"  [!] Error copying short break: {_e}")
+                else:
+                    try:
+                        shutil.copy2(_short_built, _sb_dest)
+                        print(f"  Copied: @ LOGOUT SHORT BREAK.json")
+                    except Exception as _e:
+                        print(f"  [!] Error copying short break: {_e}")
+
+        # Fixed logout files — extend if extra slots found in skill folder
         for _fixed_name in [
             "- Final logout.json",
             "- 123 Proper logout+wait+RELOGIN.json",
-            "- 01234 Proper logout+wait+RELOGIN.json",   # 5-slot: close+logout+wait+relogin+open
+            "- 01234 Proper logout+wait+RELOGIN.json",
         ]:
             _fixed_src = search_base.parent / _fixed_name
-            if _fixed_src.exists():
-                # Replace leading "-" with "@", keep rest of name exactly as-is
-                _fixed_dest_name = "@ " + _fixed_name[1:].lstrip()
+            if not _fixed_src.exists():
+                continue
+            _fixed_dest_name = "@ " + _fixed_name[1:].lstrip()
+
+            # Try to extend if: extra slots exist AND this is a "Proper logout" file
+            _extended_written = False
+            if _extra_logout and "Proper logout" in _fixed_name:
+                _fx_ext, _fx_suf = stitch_logout_extension(
+                    _fixed_src, _extra_logout, _fl_rng)
+                if _fx_ext:
+                    # Build extended name: find digit block before " Proper logout"
+                    _dn_match = re.search(r'(\d+)(?=\s+Proper logout)', _fixed_dest_name)
+                    if _dn_match:
+                        _ext_dest_name = _fixed_dest_name.replace(
+                            _dn_match.group(1),
+                            f"{_dn_match.group(1)}{_fx_suf}",
+                            1)
+                    else:
+                        _ext_dest_name = _fixed_dest_name  # fallback: same name
+                    try:
+                        (out_folder / _ext_dest_name).write_text(
+                            json.dumps(_fx_ext, separators=(',', ':')))
+                        print(f"  ✓ Extended logout: {_ext_dest_name}")
+                        _extended_written = True
+                    except Exception as _e:
+                        print(f"  [!] Error writing extended logout: {_e}")
+
+            if not _extended_written:
                 try:
                     shutil.copy2(_fixed_src, out_folder / _fixed_dest_name)
                     print(f"  ✓ Copied fixed logout: {_fixed_dest_name}")
-                except Exception as e:
-                    print(f"  ? Error copying {_fixed_name}: {e}")
+                except Exception as _e:
+                    print(f"  [!] Error copying {_fixed_name}: {_e}")
         
         # Copy non-JSON files with @ prefix (images, txt, etc — not temp/part files)
         _NONJSON_SKIP_EXTS = {".part", ".tmp", ".bak", ".swp", ".ds_store"}
@@ -4695,7 +4854,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.19"
+VERSION = "v3.19.20"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -8318,6 +8477,90 @@ def build_logout_sequence(folder_path, rng, out_path, wait_range_ms=(7200000.0, 
     print(f"    Total duration: {total_min}m {total_sec}s  |  written -> {out_path.name}")
     return out_path
 
+
+def scan_folder_slot_files(folder_path):
+    """
+    Scan the top level of folder_path for loose JSON files with a
+    numeric prefix (e.g. '5- cam and zoom.json' -> slot 5.0).
+    Sub-folders are ignored -- only direct .json children are checked.
+    Returns sorted list of (float_num, Path), ascending by number.
+    """
+    result = []
+    for _f in folder_path.glob('*.json'):
+        _m = re.match(r'^(\d+(?:\.\d+)?)\s*[-\s]', _f.name.lower())
+        if _m:
+            result.append((float(_m.group(1)), _f))
+    result.sort(key=lambda x: x[0])
+    return result
+
+
+def stitch_logout_extension(base_json_path, extra_sorted, rng):
+    """
+    Load base logout JSON and stitch extra numbered slot files onto the
+    end with 500-800ms buffers between them. filter_problematic_keys
+    is applied to each extra slot on load.
+
+    base_json_path : Path  - the base logout .json to extend
+    extra_sorted   : list of (float_num, Path) sorted ascending
+    rng            : RNG instance
+
+    Returns (merged_events, slot_suffix_str) on success,
+            (None, None) on failure.
+    slot_suffix_str is a compact string of the extra slot numbers
+    appended (e.g. slots 5 and 6 -> '56', slot 5.1 -> '5.1').
+    """
+    try:
+        _base_events = json.loads(base_json_path.read_text(encoding='utf-8'))
+    except Exception as _exc:
+        print(f"  [!] stitch_logout_extension: cannot load {base_json_path.name}: {_exc}")
+        return None, None
+
+    if not _base_events:
+        return None, None
+
+    _merged   = list(_base_events)
+    _timeline = max(e.get('Time', 0) for e in _merged)
+    _slot_ids = []
+
+    for _num, _path in extra_sorted:
+        try:
+            _evts = json.loads(_path.read_text(encoding='utf-8'))
+        except Exception as _exc:
+            print(f"  [!] stitch_logout_extension: cannot load {_path.name}: {_exc}")
+            continue
+        if not _evts:
+            continue
+
+        _evts = filter_problematic_keys(_evts)
+        if not _evts:
+            continue
+
+        # Normalise to zero base
+        _bt = min(e.get('Time', 0) for e in _evts)
+        _evts = [{**e, 'Time': e['Time'] - _bt} for e in _evts]
+
+        # Buffer gap
+        _timeline += int(rng.uniform(500.0, 800.0))
+
+        # Stitch
+        _dur = max(e.get('Time', 0) for e in _evts)
+        for e in _evts:
+            _merged.append({**e, 'Time': e['Time'] + _timeline})
+        _timeline += _dur
+
+        _label = str(int(_num)) if _num == int(_num) else str(_num)
+        _slot_ids.append(_label)
+        print(f"    + Stitched extra logout slot {_num}: {_path.name}")
+
+    if not _slot_ids:
+        return None, None
+
+    for e in _merged:
+        e['Time'] = max(0, int(round(e['Time'])))
+    _merged.sort(key=lambda e: e.get('Time', 0))
+
+    return _merged, ''.join(_slot_ids)
+
 def main():
     parser = argparse.ArgumentParser(description="String Macros v3.1.0")
     parser.add_argument("input_root", type=str)
@@ -8869,37 +9112,99 @@ def main():
             _short_built = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_short_p,
                 wait_range_ms=(1800000.0, 5400000.0))
-            if _long_built:
-                try:
-                    shutil.copy2(_long_built,  out_folder / "@ LOGOUT LONG BREAK.json")
-                    print(f"  Copied: @ LOGOUT LONG BREAK.json")
-                except Exception as _e:
-                    print(f"  [!] Error copying long break: {_e}")
-            if _short_built:
-                try:
-                    shutil.copy2(_short_built, out_folder / "@ LOGOUT SHORT BREAK.json")
-                    print(f"  Copied: @ LOGOUT SHORT BREAK.json")
-                except Exception as _e:
-                    print(f"  [!] Error copying short break: {_e}")
+            # --- Scan skill folder for extra logout slot files (5-, 6-, etc.) ---
+            _extra_logout = scan_folder_slot_files(search_base)
+            if _extra_logout:
+                print(f"  Extra logout slots found: {[_p.name for _,_p in _extra_logout]}")
 
-        # Copy fixed final logout files from REPO ROOT (one level above input_macros).
-        # These two files live at repo root, not inside input_macros/.
-        # Inserted into every strung folder completely unmodified — no features,
-        # no processing. @ replaces the leading - in the filename.
+            # Long break
+            if _long_built:
+                _lb_dest = out_folder / "@ LOGOUT LONG BREAK.json"
+                if _extra_logout:
+                    _lb_ext, _lb_suf = stitch_logout_extension(_long_built, _extra_logout, _fl_rng)
+                    if _lb_ext:
+                        try:
+                            _lb_dest.write_text(json.dumps(_lb_ext, separators=(',', ':')))
+                            print(f"  Stitched: @ LOGOUT LONG BREAK.json (+{_lb_suf})")
+                        except Exception as _e:
+                            print(f"  [!] Error writing stitched long break: {_e}")
+                    else:
+                        try:
+                            shutil.copy2(_long_built, _lb_dest)
+                            print(f"  Copied: @ LOGOUT LONG BREAK.json")
+                        except Exception as _e:
+                            print(f"  [!] Error copying long break: {_e}")
+                else:
+                    try:
+                        shutil.copy2(_long_built, _lb_dest)
+                        print(f"  Copied: @ LOGOUT LONG BREAK.json")
+                    except Exception as _e:
+                        print(f"  [!] Error copying long break: {_e}")
+
+            # Short break
+            if _short_built:
+                _sb_dest = out_folder / "@ LOGOUT SHORT BREAK.json"
+                if _extra_logout:
+                    _sb_ext, _sb_suf = stitch_logout_extension(_short_built, _extra_logout, _fl_rng)
+                    if _sb_ext:
+                        try:
+                            _sb_dest.write_text(json.dumps(_sb_ext, separators=(',', ':')))
+                            print(f"  Stitched: @ LOGOUT SHORT BREAK.json (+{_sb_suf})")
+                        except Exception as _e:
+                            print(f"  [!] Error writing stitched short break: {_e}")
+                    else:
+                        try:
+                            shutil.copy2(_short_built, _sb_dest)
+                            print(f"  Copied: @ LOGOUT SHORT BREAK.json")
+                        except Exception as _e:
+                            print(f"  [!] Error copying short break: {_e}")
+                else:
+                    try:
+                        shutil.copy2(_short_built, _sb_dest)
+                        print(f"  Copied: @ LOGOUT SHORT BREAK.json")
+                    except Exception as _e:
+                        print(f"  [!] Error copying short break: {_e}")
+
+        # Fixed logout files — extend if extra slots found in skill folder
         for _fixed_name in [
             "- Final logout.json",
             "- 123 Proper logout+wait+RELOGIN.json",
-            "- 01234 Proper logout+wait+RELOGIN.json",   # 5-slot: close+logout+wait+relogin+open
+            "- 01234 Proper logout+wait+RELOGIN.json",
         ]:
             _fixed_src = search_base.parent / _fixed_name
-            if _fixed_src.exists():
-                # Replace leading "-" with "@", keep rest of name exactly as-is
-                _fixed_dest_name = "@ " + _fixed_name[1:].lstrip()
+            if not _fixed_src.exists():
+                continue
+            _fixed_dest_name = "@ " + _fixed_name[1:].lstrip()
+
+            # Try to extend if: extra slots exist AND this is a "Proper logout" file
+            _extended_written = False
+            if _extra_logout and "Proper logout" in _fixed_name:
+                _fx_ext, _fx_suf = stitch_logout_extension(
+                    _fixed_src, _extra_logout, _fl_rng)
+                if _fx_ext:
+                    # Build extended name: find digit block before " Proper logout"
+                    _dn_match = re.search(r'(\d+)(?=\s+Proper logout)', _fixed_dest_name)
+                    if _dn_match:
+                        _ext_dest_name = _fixed_dest_name.replace(
+                            _dn_match.group(1),
+                            f"{_dn_match.group(1)}{_fx_suf}",
+                            1)
+                    else:
+                        _ext_dest_name = _fixed_dest_name  # fallback: same name
+                    try:
+                        (out_folder / _ext_dest_name).write_text(
+                            json.dumps(_fx_ext, separators=(',', ':')))
+                        print(f"  ✓ Extended logout: {_ext_dest_name}")
+                        _extended_written = True
+                    except Exception as _e:
+                        print(f"  [!] Error writing extended logout: {_e}")
+
+            if not _extended_written:
                 try:
                     shutil.copy2(_fixed_src, out_folder / _fixed_dest_name)
                     print(f"  ✓ Copied fixed logout: {_fixed_dest_name}")
-                except Exception as e:
-                    print(f"  ? Error copying {_fixed_name}: {e}")
+                except Exception as _e:
+                    print(f"  [!] Error copying {_fixed_name}: {_e}")
         
         # Copy non-JSON files with @ prefix (images, txt, etc — not temp/part files)
         _NONJSON_SKIP_EXTS = {".part", ".tmp", ".bak", ".swp", ".ds_store"}
