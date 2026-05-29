@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.20
+  Current version: v3.19.21
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,16 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.21: Fixed v3.19.20 logout extension feature (two bugs).
+            BUG 1: scan_folder_slot_files was called with search_base
+            (input_macros/ root) instead of folder (current skill folder).
+            The 5- file lives inside e.g. '6- Smithing files/', not in
+            input_macros/ root. Fixed to use `folder` variable.
+            BUG 2: _extra_logout was scoped inside if _logout_folder:
+            block, making it inaccessible to the for _fixed_name: loop
+            which sits outside that block. Fixed by defining _extra_logout
+            before the if block -- always [] or populated, never undefined.
+            Both bugs meant the feature silently did nothing in all cases.
 - v3.19.20: New feature — skill-folder logout extension.
             If the top level of a skill folder contains loose JSON files
             with numeric prefixes (e.g. '5- cam and zoom adjust.json'),
@@ -945,7 +955,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.20"
+VERSION = "v3.19.21"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -4581,11 +4591,19 @@ def main():
         out_folder = bundle_dir / output_folder_name
         out_folder.mkdir(parents=True, exist_ok=True)
         
+        # Scan skill folder for extra logout slot files (e.g. '5- cam and zoom.json').
+        # Uses `folder` (the current skill folder), NOT search_base (input_macros root).
+        # Works for both whole-folder and specific-subfolder runs — `folder` is always
+        # the top-level skill folder in the outer loop regardless of specific-folders mode.
+        _extra_logout = scan_folder_slot_files(folder)
+        if _extra_logout:
+            print(f"  Extra logout slots: {[_p.name for _, _p in _extra_logout]}")
+
         # Generate LONG BREAK + SHORT BREAK per folder (fresh unseeded RNG each call).
-        # Long:  2h – 4.5h   (7200000–16200000 ms)
-        # Short: 30min – 90min (1800000– 5400000 ms)
+        # Long:  2h - 4.5h   (7200000-16200000 ms)
+        # Short: 30min - 90min (1800000- 5400000 ms)
         if _logout_folder:
-            _fl_rng = random.Random()  # unseeded — different per folder and per run
+            _fl_rng     = random.Random()
             _lo_long_p  = Path(args.output_root) / "- logout long break.json"
             _lo_short_p = Path(args.output_root) / "- logout short break.json"
             _long_built  = build_logout_sequence(
@@ -4594,60 +4612,50 @@ def main():
             _short_built = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_short_p,
                 wait_range_ms=(1800000.0, 5400000.0))
-            # --- Scan skill folder for extra logout slot files (5-, 6-, etc.) ---
-            _extra_logout = scan_folder_slot_files(search_base)
-            if _extra_logout:
-                print(f"  Extra logout slots found: {[_p.name for _,_p in _extra_logout]}")
 
             # Long break
             if _long_built:
                 _lb_dest = out_folder / "@ LOGOUT LONG BREAK.json"
                 if _extra_logout:
-                    _lb_ext, _lb_suf = stitch_logout_extension(_long_built, _extra_logout, _fl_rng)
+                    _lb_ext, _lb_suf = stitch_logout_extension(
+                        _long_built, _extra_logout, _fl_rng)
                     if _lb_ext:
                         try:
                             _lb_dest.write_text(json.dumps(_lb_ext, separators=(',', ':')))
                             print(f"  Stitched: @ LOGOUT LONG BREAK.json (+{_lb_suf})")
                         except Exception as _e:
-                            print(f"  [!] Error writing stitched long break: {_e}")
-                    else:
-                        try:
+                            print(f"  [!] Stitch error (long break): {_e}")
                             shutil.copy2(_long_built, _lb_dest)
-                            print(f"  Copied: @ LOGOUT LONG BREAK.json")
-                        except Exception as _e:
-                            print(f"  [!] Error copying long break: {_e}")
-                else:
-                    try:
+                    else:
                         shutil.copy2(_long_built, _lb_dest)
                         print(f"  Copied: @ LOGOUT LONG BREAK.json")
-                    except Exception as _e:
-                        print(f"  [!] Error copying long break: {_e}")
+                else:
+                    shutil.copy2(_long_built, _lb_dest)
+                    print(f"  Copied: @ LOGOUT LONG BREAK.json")
 
             # Short break
             if _short_built:
                 _sb_dest = out_folder / "@ LOGOUT SHORT BREAK.json"
                 if _extra_logout:
-                    _sb_ext, _sb_suf = stitch_logout_extension(_short_built, _extra_logout, _fl_rng)
+                    _sb_ext, _sb_suf = stitch_logout_extension(
+                        _short_built, _extra_logout, _fl_rng)
                     if _sb_ext:
                         try:
                             _sb_dest.write_text(json.dumps(_sb_ext, separators=(',', ':')))
                             print(f"  Stitched: @ LOGOUT SHORT BREAK.json (+{_sb_suf})")
                         except Exception as _e:
-                            print(f"  [!] Error writing stitched short break: {_e}")
-                    else:
-                        try:
+                            print(f"  [!] Stitch error (short break): {_e}")
                             shutil.copy2(_short_built, _sb_dest)
-                            print(f"  Copied: @ LOGOUT SHORT BREAK.json")
-                        except Exception as _e:
-                            print(f"  [!] Error copying short break: {_e}")
-                else:
-                    try:
+                    else:
                         shutil.copy2(_short_built, _sb_dest)
                         print(f"  Copied: @ LOGOUT SHORT BREAK.json")
-                    except Exception as _e:
-                        print(f"  [!] Error copying short break: {_e}")
+                else:
+                    shutil.copy2(_short_built, _sb_dest)
+                    print(f"  Copied: @ LOGOUT SHORT BREAK.json")
 
-        # Fixed logout files — extend if extra slots found in skill folder
+        # Fixed logout files -- extend with extra slots if found in skill folder.
+        # _extra_logout is always defined above ([] if none found), so this block
+        # is safe regardless of whether _logout_folder exists.
         for _fixed_name in [
             "- Final logout.json",
             "- 123 Proper logout+wait+RELOGIN.json",
@@ -4658,25 +4666,22 @@ def main():
                 continue
             _fixed_dest_name = "@ " + _fixed_name[1:].lstrip()
 
-            # Try to extend if: extra slots exist AND this is a "Proper logout" file
             _extended_written = False
             if _extra_logout and "Proper logout" in _fixed_name:
+                _fx_rng = random.Random()   # fresh RNG for buffer gaps
                 _fx_ext, _fx_suf = stitch_logout_extension(
-                    _fixed_src, _extra_logout, _fl_rng)
+                    _fixed_src, _extra_logout, _fx_rng)
                 if _fx_ext:
-                    # Build extended name: find digit block before " Proper logout"
-                    _dn_match = re.search(r'(\d+)(?=\s+Proper logout)', _fixed_dest_name)
-                    if _dn_match:
-                        _ext_dest_name = _fixed_dest_name.replace(
-                            _dn_match.group(1),
-                            f"{_dn_match.group(1)}{_fx_suf}",
-                            1)
-                    else:
-                        _ext_dest_name = _fixed_dest_name  # fallback: same name
+                    _dn_m = re.search(r'(\d+)(?=\s+Proper logout)', _fixed_dest_name)
+                    _ext_dest_name = (
+                        _fixed_dest_name.replace(_dn_m.group(1),
+                                                  f"{_dn_m.group(1)}{_fx_suf}", 1)
+                        if _dn_m else _fixed_dest_name
+                    )
                     try:
                         (out_folder / _ext_dest_name).write_text(
                             json.dumps(_fx_ext, separators=(',', ':')))
-                        print(f"  ✓ Extended logout: {_ext_dest_name}")
+                        print(f"  \u2713 Extended logout: {_ext_dest_name}")
                         _extended_written = True
                     except Exception as _e:
                         print(f"  [!] Error writing extended logout: {_e}")
@@ -4684,10 +4689,9 @@ def main():
             if not _extended_written:
                 try:
                     shutil.copy2(_fixed_src, out_folder / _fixed_dest_name)
-                    print(f"  ✓ Copied fixed logout: {_fixed_dest_name}")
+                    print(f"  \u2713 Copied fixed logout: {_fixed_dest_name}")
                 except Exception as _e:
                     print(f"  [!] Error copying {_fixed_name}: {_e}")
-        
         # Copy non-JSON files with @ prefix (images, txt, etc — not temp/part files)
         _NONJSON_SKIP_EXTS = {".part", ".tmp", ".bak", ".swp", ".ds_store"}
         for non_json_file in non_json_files:
@@ -4854,7 +4858,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.20"
+VERSION = "v3.19.21"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -9099,11 +9103,19 @@ def main():
         out_folder = bundle_dir / output_folder_name
         out_folder.mkdir(parents=True, exist_ok=True)
         
+        # Scan skill folder for extra logout slot files (e.g. '5- cam and zoom.json').
+        # Uses `folder` (the current skill folder), NOT search_base (input_macros root).
+        # Works for both whole-folder and specific-subfolder runs — `folder` is always
+        # the top-level skill folder in the outer loop regardless of specific-folders mode.
+        _extra_logout = scan_folder_slot_files(folder)
+        if _extra_logout:
+            print(f"  Extra logout slots: {[_p.name for _, _p in _extra_logout]}")
+
         # Generate LONG BREAK + SHORT BREAK per folder (fresh unseeded RNG each call).
-        # Long:  2h – 4.5h   (7200000–16200000 ms)
-        # Short: 30min – 90min (1800000– 5400000 ms)
+        # Long:  2h - 4.5h   (7200000-16200000 ms)
+        # Short: 30min - 90min (1800000- 5400000 ms)
         if _logout_folder:
-            _fl_rng = random.Random()  # unseeded — different per folder and per run
+            _fl_rng     = random.Random()
             _lo_long_p  = Path(args.output_root) / "- logout long break.json"
             _lo_short_p = Path(args.output_root) / "- logout short break.json"
             _long_built  = build_logout_sequence(
@@ -9112,60 +9124,50 @@ def main():
             _short_built = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_short_p,
                 wait_range_ms=(1800000.0, 5400000.0))
-            # --- Scan skill folder for extra logout slot files (5-, 6-, etc.) ---
-            _extra_logout = scan_folder_slot_files(search_base)
-            if _extra_logout:
-                print(f"  Extra logout slots found: {[_p.name for _,_p in _extra_logout]}")
 
             # Long break
             if _long_built:
                 _lb_dest = out_folder / "@ LOGOUT LONG BREAK.json"
                 if _extra_logout:
-                    _lb_ext, _lb_suf = stitch_logout_extension(_long_built, _extra_logout, _fl_rng)
+                    _lb_ext, _lb_suf = stitch_logout_extension(
+                        _long_built, _extra_logout, _fl_rng)
                     if _lb_ext:
                         try:
                             _lb_dest.write_text(json.dumps(_lb_ext, separators=(',', ':')))
                             print(f"  Stitched: @ LOGOUT LONG BREAK.json (+{_lb_suf})")
                         except Exception as _e:
-                            print(f"  [!] Error writing stitched long break: {_e}")
-                    else:
-                        try:
+                            print(f"  [!] Stitch error (long break): {_e}")
                             shutil.copy2(_long_built, _lb_dest)
-                            print(f"  Copied: @ LOGOUT LONG BREAK.json")
-                        except Exception as _e:
-                            print(f"  [!] Error copying long break: {_e}")
-                else:
-                    try:
+                    else:
                         shutil.copy2(_long_built, _lb_dest)
                         print(f"  Copied: @ LOGOUT LONG BREAK.json")
-                    except Exception as _e:
-                        print(f"  [!] Error copying long break: {_e}")
+                else:
+                    shutil.copy2(_long_built, _lb_dest)
+                    print(f"  Copied: @ LOGOUT LONG BREAK.json")
 
             # Short break
             if _short_built:
                 _sb_dest = out_folder / "@ LOGOUT SHORT BREAK.json"
                 if _extra_logout:
-                    _sb_ext, _sb_suf = stitch_logout_extension(_short_built, _extra_logout, _fl_rng)
+                    _sb_ext, _sb_suf = stitch_logout_extension(
+                        _short_built, _extra_logout, _fl_rng)
                     if _sb_ext:
                         try:
                             _sb_dest.write_text(json.dumps(_sb_ext, separators=(',', ':')))
                             print(f"  Stitched: @ LOGOUT SHORT BREAK.json (+{_sb_suf})")
                         except Exception as _e:
-                            print(f"  [!] Error writing stitched short break: {_e}")
-                    else:
-                        try:
+                            print(f"  [!] Stitch error (short break): {_e}")
                             shutil.copy2(_short_built, _sb_dest)
-                            print(f"  Copied: @ LOGOUT SHORT BREAK.json")
-                        except Exception as _e:
-                            print(f"  [!] Error copying short break: {_e}")
-                else:
-                    try:
+                    else:
                         shutil.copy2(_short_built, _sb_dest)
                         print(f"  Copied: @ LOGOUT SHORT BREAK.json")
-                    except Exception as _e:
-                        print(f"  [!] Error copying short break: {_e}")
+                else:
+                    shutil.copy2(_short_built, _sb_dest)
+                    print(f"  Copied: @ LOGOUT SHORT BREAK.json")
 
-        # Fixed logout files — extend if extra slots found in skill folder
+        # Fixed logout files -- extend with extra slots if found in skill folder.
+        # _extra_logout is always defined above ([] if none found), so this block
+        # is safe regardless of whether _logout_folder exists.
         for _fixed_name in [
             "- Final logout.json",
             "- 123 Proper logout+wait+RELOGIN.json",
@@ -9176,25 +9178,22 @@ def main():
                 continue
             _fixed_dest_name = "@ " + _fixed_name[1:].lstrip()
 
-            # Try to extend if: extra slots exist AND this is a "Proper logout" file
             _extended_written = False
             if _extra_logout and "Proper logout" in _fixed_name:
+                _fx_rng = random.Random()   # fresh RNG for buffer gaps
                 _fx_ext, _fx_suf = stitch_logout_extension(
-                    _fixed_src, _extra_logout, _fl_rng)
+                    _fixed_src, _extra_logout, _fx_rng)
                 if _fx_ext:
-                    # Build extended name: find digit block before " Proper logout"
-                    _dn_match = re.search(r'(\d+)(?=\s+Proper logout)', _fixed_dest_name)
-                    if _dn_match:
-                        _ext_dest_name = _fixed_dest_name.replace(
-                            _dn_match.group(1),
-                            f"{_dn_match.group(1)}{_fx_suf}",
-                            1)
-                    else:
-                        _ext_dest_name = _fixed_dest_name  # fallback: same name
+                    _dn_m = re.search(r'(\d+)(?=\s+Proper logout)', _fixed_dest_name)
+                    _ext_dest_name = (
+                        _fixed_dest_name.replace(_dn_m.group(1),
+                                                  f"{_dn_m.group(1)}{_fx_suf}", 1)
+                        if _dn_m else _fixed_dest_name
+                    )
                     try:
                         (out_folder / _ext_dest_name).write_text(
                             json.dumps(_fx_ext, separators=(',', ':')))
-                        print(f"  ✓ Extended logout: {_ext_dest_name}")
+                        print(f"  \u2713 Extended logout: {_ext_dest_name}")
                         _extended_written = True
                     except Exception as _e:
                         print(f"  [!] Error writing extended logout: {_e}")
@@ -9202,10 +9201,9 @@ def main():
             if not _extended_written:
                 try:
                     shutil.copy2(_fixed_src, out_folder / _fixed_dest_name)
-                    print(f"  ✓ Copied fixed logout: {_fixed_dest_name}")
+                    print(f"  \u2713 Copied fixed logout: {_fixed_dest_name}")
                 except Exception as _e:
                     print(f"  [!] Error copying {_fixed_name}: {_e}")
-        
         # Copy non-JSON files with @ prefix (images, txt, etc — not temp/part files)
         _NONJSON_SKIP_EXTS = {".part", ".tmp", ".bak", ".swp", ".ds_store"}
         for non_json_file in non_json_files:
