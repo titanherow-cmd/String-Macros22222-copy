@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.21
+  Current version: v3.19.22
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,15 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.22: Fixed stitch_logout_extension (3rd bug): base file was not
+            being filtered (filter_problematic_keys) or normalised to
+            t=0 before stitching. END key at t=0 was preserved in output
+            and original time offset was retained causing timing corruption
+            in the stitched result. Both base and extra slots are now
+            filtered and normalised before assembly.
+            Also confirmed fix from v3.19.21 (wrong loop variable, scope).
+            Stitch logic verified against real files: 601-event base +
+            191-event extra (5-) = 787-event output, 2.71 min.
 - v3.19.21: Fixed v3.19.20 logout extension feature (two bugs).
             BUG 1: scan_folder_slot_files was called with search_base
             (input_macros/ root) instead of folder (current skill folder).
@@ -955,7 +964,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.21"
+VERSION = "v3.19.22"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -3988,29 +3997,35 @@ def scan_folder_slot_files(folder_path):
 
 def stitch_logout_extension(base_json_path, extra_sorted, rng):
     """
-    Load base logout JSON and stitch extra numbered slot files onto the
-    end with 500-800ms buffers between them. filter_problematic_keys
-    is applied to each extra slot on load.
+    Load base logout JSON, filter it, normalise to t=0, then stitch
+    extra numbered slot files onto the end with 500-800ms buffers.
+    filter_problematic_keys applied to both base and each extra slot.
 
-    base_json_path : Path  - the base logout .json to extend
-    extra_sorted   : list of (float_num, Path) sorted ascending
+    base_json_path : Path  - base logout file (e.g. - 01234 Proper...json)
+    extra_sorted   : list of (float_num, Path) sorted ascending by num
     rng            : RNG instance
 
     Returns (merged_events, slot_suffix_str) on success,
             (None, None) on failure.
-    slot_suffix_str is a compact string of the extra slot numbers
-    appended (e.g. slots 5 and 6 -> '56', slot 5.1 -> '5.1').
+    slot_suffix_str: compact string of extra slot numbers (e.g. '5' or '56').
     """
     try:
-        _base_events = json.loads(base_json_path.read_text(encoding='utf-8'))
+        _base = json.loads(base_json_path.read_text(encoding='utf-8'))
     except Exception as _exc:
         print(f"  [!] stitch_logout_extension: cannot load {base_json_path.name}: {_exc}")
         return None, None
 
-    if not _base_events:
+    if not _base:
         return None, None
 
-    _merged   = list(_base_events)
+    # Filter and normalise base to t=0
+    _base = filter_problematic_keys(_base)
+    if not _base:
+        return None, None
+    _base_bt = min(e.get('Time', 0) for e in _base)
+    _base    = [{**e, 'Time': e['Time'] - _base_bt} for e in _base]
+
+    _merged   = list(_base)
     _timeline = max(e.get('Time', 0) for e in _merged)
     _slot_ids = []
 
@@ -4022,24 +4037,18 @@ def stitch_logout_extension(base_json_path, extra_sorted, rng):
             continue
         if not _evts:
             continue
-
         _evts = filter_problematic_keys(_evts)
         if not _evts:
             continue
-
-        # Normalise to zero base
-        _bt = min(e.get('Time', 0) for e in _evts)
+        # Normalise extra slot to t=0
+        _bt   = min(e.get('Time', 0) for e in _evts)
         _evts = [{**e, 'Time': e['Time'] - _bt} for e in _evts]
-
-        # Buffer gap
+        # Buffer gap then stitch
         _timeline += int(rng.uniform(500.0, 800.0))
-
-        # Stitch
-        _dur = max(e.get('Time', 0) for e in _evts)
+        _dur  = max(e.get('Time', 0) for e in _evts)
         for e in _evts:
             _merged.append({**e, 'Time': e['Time'] + _timeline})
         _timeline += _dur
-
         _label = str(int(_num)) if _num == int(_num) else str(_num)
         _slot_ids.append(_label)
         print(f"    + Stitched extra logout slot {_num}: {_path.name}")
@@ -4050,7 +4059,6 @@ def stitch_logout_extension(base_json_path, extra_sorted, rng):
     for e in _merged:
         e['Time'] = max(0, int(round(e['Time'])))
     _merged.sort(key=lambda e: e.get('Time', 0))
-
     return _merged, ''.join(_slot_ids)
 
 def main():
@@ -4595,6 +4603,7 @@ def main():
         # Uses `folder` (the current skill folder), NOT search_base (input_macros root).
         # Works for both whole-folder and specific-subfolder runs — `folder` is always
         # the top-level skill folder in the outer loop regardless of specific-folders mode.
+        _extra_logout = []   # populated below if skill folder has extra logout slots
         _extra_logout = scan_folder_slot_files(folder)
         if _extra_logout:
             print(f"  Extra logout slots: {[_p.name for _, _p in _extra_logout]}")
@@ -4858,7 +4867,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.21"
+VERSION = "v3.19.22"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -8500,29 +8509,35 @@ def scan_folder_slot_files(folder_path):
 
 def stitch_logout_extension(base_json_path, extra_sorted, rng):
     """
-    Load base logout JSON and stitch extra numbered slot files onto the
-    end with 500-800ms buffers between them. filter_problematic_keys
-    is applied to each extra slot on load.
+    Load base logout JSON, filter it, normalise to t=0, then stitch
+    extra numbered slot files onto the end with 500-800ms buffers.
+    filter_problematic_keys applied to both base and each extra slot.
 
-    base_json_path : Path  - the base logout .json to extend
-    extra_sorted   : list of (float_num, Path) sorted ascending
+    base_json_path : Path  - base logout file (e.g. - 01234 Proper...json)
+    extra_sorted   : list of (float_num, Path) sorted ascending by num
     rng            : RNG instance
 
     Returns (merged_events, slot_suffix_str) on success,
             (None, None) on failure.
-    slot_suffix_str is a compact string of the extra slot numbers
-    appended (e.g. slots 5 and 6 -> '56', slot 5.1 -> '5.1').
+    slot_suffix_str: compact string of extra slot numbers (e.g. '5' or '56').
     """
     try:
-        _base_events = json.loads(base_json_path.read_text(encoding='utf-8'))
+        _base = json.loads(base_json_path.read_text(encoding='utf-8'))
     except Exception as _exc:
         print(f"  [!] stitch_logout_extension: cannot load {base_json_path.name}: {_exc}")
         return None, None
 
-    if not _base_events:
+    if not _base:
         return None, None
 
-    _merged   = list(_base_events)
+    # Filter and normalise base to t=0
+    _base = filter_problematic_keys(_base)
+    if not _base:
+        return None, None
+    _base_bt = min(e.get('Time', 0) for e in _base)
+    _base    = [{**e, 'Time': e['Time'] - _base_bt} for e in _base]
+
+    _merged   = list(_base)
     _timeline = max(e.get('Time', 0) for e in _merged)
     _slot_ids = []
 
@@ -8534,24 +8549,18 @@ def stitch_logout_extension(base_json_path, extra_sorted, rng):
             continue
         if not _evts:
             continue
-
         _evts = filter_problematic_keys(_evts)
         if not _evts:
             continue
-
-        # Normalise to zero base
-        _bt = min(e.get('Time', 0) for e in _evts)
+        # Normalise extra slot to t=0
+        _bt   = min(e.get('Time', 0) for e in _evts)
         _evts = [{**e, 'Time': e['Time'] - _bt} for e in _evts]
-
-        # Buffer gap
+        # Buffer gap then stitch
         _timeline += int(rng.uniform(500.0, 800.0))
-
-        # Stitch
-        _dur = max(e.get('Time', 0) for e in _evts)
+        _dur  = max(e.get('Time', 0) for e in _evts)
         for e in _evts:
             _merged.append({**e, 'Time': e['Time'] + _timeline})
         _timeline += _dur
-
         _label = str(int(_num)) if _num == int(_num) else str(_num)
         _slot_ids.append(_label)
         print(f"    + Stitched extra logout slot {_num}: {_path.name}")
@@ -8562,7 +8571,6 @@ def stitch_logout_extension(base_json_path, extra_sorted, rng):
     for e in _merged:
         e['Time'] = max(0, int(round(e['Time'])))
     _merged.sort(key=lambda e: e.get('Time', 0))
-
     return _merged, ''.join(_slot_ids)
 
 def main():
@@ -9107,6 +9115,7 @@ def main():
         # Uses `folder` (the current skill folder), NOT search_base (input_macros root).
         # Works for both whole-folder and specific-subfolder runs — `folder` is always
         # the top-level skill folder in the outer loop regardless of specific-folders mode.
+        _extra_logout = []   # populated below if skill folder has extra logout slots
         _extra_logout = scan_folder_slot_files(folder)
         if _extra_logout:
             print(f"  Extra logout slots: {[_p.name for _, _p in _extra_logout]}")
