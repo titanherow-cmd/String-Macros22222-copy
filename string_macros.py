@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.23
+  Current version: v3.19.24
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,16 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.24: Fixed skill-folder matching in build_logout_sequence callers.
+            ROOT CAUSE: cleaned_folder_name (subfolder output name e.g.
+            '60- Only Smth R2H') was passed as skill_folder_name instead
+            of folder.name (outer loop skill folder e.g. '6- Smithing
+            files'). Tag '6- smithing files' was compared against '60-...'
+            giving leading digit '6' != '60' -> always False -> skill-specific
+            slots never included. Fix: capture _skill_folder_name = folder.name
+            at outer loop level and pass it to all three build_logout_sequence
+            calls. Matching logic and tag extraction were correct throughout.
+            Long/short break random wait behaviour confirmed unchanged.
 - v3.19.23: Reworked logout file generation. Reverts v3.19.20-22 scan/stitch
             approach. New design:
             1. build_logout_sequence now uses numeric prefix detection
@@ -980,7 +990,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.23"
+VERSION = "v3.19.24"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -4547,6 +4557,8 @@ def main():
         
         # D_ REMOVAL
         cleaned_folder_name = re.sub(r'[Dd]_', '', folder_name)
+        _skill_folder_name = folder.name   # e.g. '6- Smithing files' — OUTER loop name,
+                                           # NOT cleaned_folder_name which changes per version
         
         # Extract folder number
         folder_num_match = re.search(r'\d+', cleaned_folder_name)
@@ -4575,15 +4587,15 @@ def main():
             _long_built,  _ = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_long_p,
                 wait_range_ms=(7200000.0, 16200000.0),
-                skill_folder_name=folder.name)
+                skill_folder_name=_skill_folder_name)
             _short_built, _ = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_short_p,
                 wait_range_ms=(1800000.0, 5400000.0),
-                skill_folder_name=folder.name)
+                skill_folder_name=_skill_folder_name)
             _fixed_built, _fixed_slots = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_fixed_p,
                 wait_range_ms=None,
-                skill_folder_name=folder.name)
+                skill_folder_name=_skill_folder_name)
 
             if _long_built:
                 try:
@@ -4781,7 +4793,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.23"
+VERSION = "v3.19.24"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -8957,6 +8969,8 @@ def main():
         
         # D_ REMOVAL
         cleaned_folder_name = re.sub(r'[Dd]_', '', folder_name)
+        _skill_folder_name = folder.name   # e.g. '6- Smithing files' — OUTER loop name,
+                                           # NOT cleaned_folder_name which changes per version
         
         # Extract folder number
         folder_num_match = re.search(r'\d+', cleaned_folder_name)
@@ -8985,15 +8999,15 @@ def main():
             _long_built,  _ = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_long_p,
                 wait_range_ms=(7200000.0, 16200000.0),
-                skill_folder_name=folder.name)
+                skill_folder_name=_skill_folder_name)
             _short_built, _ = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_short_p,
                 wait_range_ms=(1800000.0, 5400000.0),
-                skill_folder_name=folder.name)
+                skill_folder_name=_skill_folder_name)
             _fixed_built, _fixed_slots = build_logout_sequence(
                 _logout_folder, _fl_rng, _lo_fixed_p,
                 wait_range_ms=None,
-                skill_folder_name=folder.name)
+                skill_folder_name=_skill_folder_name)
 
             if _long_built:
                 try:
