@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.25
+  Current version: v3.19.26
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,17 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.26: Raised Part E _OOB_SAFE_Y_MIN from 50 to 80.
+            ROOT CAUSE (CBD__5_.json): cursor parked at Y=57 for 9820ms
+            -- slipped through Part E (Y=57 > old threshold of 50 by 7px).
+            Intra-file pause extended idle to ~12.5s at Y=57, causing game
+            window defocus before final click at (945,357). Threshold 80
+            catches Y=21 (SRADM), Y=57 (this file), leaves Y=80+ intact.
+            Only affects cursors PARKED in gaps >= _OOB_IDLE_GATE (1000ms).
+            ALSO: '- Quick logout wait RELOGIN.json' at repo root is now
+            copied to all output folders as '@ Quick logout wait RELOGIN.json'
+            alongside '@ Final logout.json'. Same copy-with-prefix pattern.
+            Applied to both copies.
 - v3.19.25: Reverted skill-specific logout approach (v3.19.20-24).
             New design: if a skill folder (e.g. '6- Smithing files/')
             contains its own 'LOGOUT, wait, in' subfolder, that folder
@@ -1002,7 +1013,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.25"
+VERSION = "v3.19.26"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -2359,7 +2370,10 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # (OS/browser responds to cursor entering title bar / system UI area).
         # If an out-of-bounds MM is followed by a long idle (cursor parked
         # there), replace its coords with the last known safe position.
-        _OOB_SAFE_Y_MIN  = 50    # anything above this is browser chrome / title bar
+        _OOB_SAFE_Y_MIN  = 80    # raised from 50: catches cursor parking at Y=57-79
+                                  # (browser chrome / top OS UI area). Only affects
+                                  # cursors PARKED in idle gaps >= _OOB_IDLE_GATE --
+                                  # active movement through Y<80 is never clamped.
         _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
         _OOB_SAFE_X_MIN  = 0
         _OOB_SAFE_X_MAX  = 1920
@@ -4591,13 +4605,19 @@ def main():
                     print(f"  [!] Error writing fixed logout: {_e}")
 
         # @ Final logout.json -- still copied from repo root, unchanged
-        _final_src = search_base.parent / "- Final logout.json"
-        if _final_src.exists():
+        for _repo_fixed in [
+            "- Final logout.json",
+            "- Quick logout wait RELOGIN.json",
+        ]:
+            _rf_src = search_base.parent / _repo_fixed
+            if not _rf_src.exists():
+                continue
+            _rf_dest = "@ " + _repo_fixed[1:].lstrip()
             try:
-                shutil.copy2(_final_src, out_folder / "@ Final logout.json")
-                print(f"  ✓ Copied fixed logout: @ Final logout.json")
+                shutil.copy2(_rf_src, out_folder / _rf_dest)
+                print(f"  ✓ Copied fixed logout: {_rf_dest}")
             except Exception as _e:
-                print(f"  [!] Error copying Final logout: {_e}")
+                print(f"  [!] Error copying {_repo_fixed}: {_e}")
         # Copy non-JSON files with @ prefix (images, txt, etc — not temp/part files)
         _NONJSON_SKIP_EXTS = {".part", ".tmp", ".bak", ".swp", ".ds_store"}
         for non_json_file in non_json_files:
@@ -4764,7 +4784,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.25"
+VERSION = "v3.19.26"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -6730,7 +6750,10 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # (OS/browser responds to cursor entering title bar / system UI area).
         # If an out-of-bounds MM is followed by a long idle (cursor parked
         # there), replace its coords with the last known safe position.
-        _OOB_SAFE_Y_MIN  = 50    # anything above this is browser chrome / title bar
+        _OOB_SAFE_Y_MIN  = 80    # raised from 50: catches cursor parking at Y=57-79
+                                  # (browser chrome / top OS UI area). Only affects
+                                  # cursors PARKED in idle gaps >= _OOB_IDLE_GATE --
+                                  # active movement through Y<80 is never clamped.
         _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
         _OOB_SAFE_X_MIN  = 0
         _OOB_SAFE_X_MAX  = 1920
@@ -8962,13 +8985,19 @@ def main():
                     print(f"  [!] Error writing fixed logout: {_e}")
 
         # @ Final logout.json -- still copied from repo root, unchanged
-        _final_src = search_base.parent / "- Final logout.json"
-        if _final_src.exists():
+        for _repo_fixed in [
+            "- Final logout.json",
+            "- Quick logout wait RELOGIN.json",
+        ]:
+            _rf_src = search_base.parent / _repo_fixed
+            if not _rf_src.exists():
+                continue
+            _rf_dest = "@ " + _repo_fixed[1:].lstrip()
             try:
-                shutil.copy2(_final_src, out_folder / "@ Final logout.json")
-                print(f"  ✓ Copied fixed logout: @ Final logout.json")
+                shutil.copy2(_rf_src, out_folder / _rf_dest)
+                print(f"  ✓ Copied fixed logout: {_rf_dest}")
             except Exception as _e:
-                print(f"  [!] Error copying Final logout: {_e}")
+                print(f"  [!] Error copying {_repo_fixed}: {_e}")
         # Copy non-JSON files with @ prefix (images, txt, etc — not temp/part files)
         _NONJSON_SKIP_EXTS = {".part", ".tmp", ".bak", ".swp", ".ds_store"}
         for non_json_file in non_json_files:
