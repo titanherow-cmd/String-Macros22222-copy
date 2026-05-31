@@ -1,0 +1,12 @@
+=== BUNDLE 489 COMBINATION HISTORY ===
+
+[61- Smth R2H+NotedAlch- Varr- zoomanvil left- W]
+F1=WBMNR (71).json|F2=CAA (52).json|F3=SRADM (49).json|F4=FMF SmthAlch (19).json
+F1=WBMNR (81).json|F2=CAA (26).json|F3=SRADM (13).json|F4=FMF SmthAlch (22).json|F6=FUNSAL (102).json+FUNSAL (94).json+FUNSAL (62).json
+F1=WBMNR (2).json|F2=CAA (13).json|F3=SRADM (45).json|F4=FMF SmthAlch (4).json|F6=FUNSAL (108).json+FUNSAL (23).json
+F1=WBMNR (33).json|F2=CAA (66).json|F3=SRADM (50).json|F4=FMF SmthAlch (50).json
+F1=WBMNR (17).json|F2=CAA (24).json|F3=SRADM (56).json|F4=FMF SmthAlch (3).json
+F1=WBMNR (16).json|F2=CAA (34).json|F3=SRADM (39).json|F4=FMF SmthAlch (20).json|F6=FUNSAL (10).json+FUNSAL (109).json+FUNSAL (87).json
+F1=WBMNR (41).json|F2=CAA (62).json|F3=SRADM (9).json|F4=FMF SmthAlch (42).json
+F1=WBMNR (30).json|F2=CAA (50).json|F3=SRADM (22).json|F4=FMF SmthAlch (30).json
+
