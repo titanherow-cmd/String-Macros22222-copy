@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.23
+  Current version: v3.19.25
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,28 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.25: Reverted skill-specific logout approach (v3.19.20-24).
+            New design: if a skill folder (e.g. '6- Smithing files/')
+            contains its own 'LOGOUT, wait, in' subfolder, that folder
+            is used to build all logout files for that skill's subfolders.
+            Falls back to global input_macros/LOGOUT, wait, in/ otherwise.
+            No filename parsing or skill-tag matching needed -- the folder
+            structure itself carries the skill-specific information.
+            @ 0123 Proper logout+wait+RELOGIN.json (and variants) built
+            dynamically per output folder; name reflects actual slots used.
+            Long/short break random wait behaviour unchanged.
+            Removed: _extract_skill_tag_from_logout_name,
+                     _logout_tag_matches_folder, _skill_folder_name.
+- v3.19.24: Fixed skill-folder matching in build_logout_sequence callers.
+            ROOT CAUSE: cleaned_folder_name (subfolder output name e.g.
+            '60- Only Smth R2H') was passed as skill_folder_name instead
+            of folder.name (outer loop skill folder e.g. '6- Smithing
+            files'). Tag '6- smithing files' was compared against '60-...'
+            giving leading digit '6' != '60' -> always False -> skill-specific
+            slots never included. Fix: capture _skill_folder_name = folder.name
+            at outer loop level and pass it to all three build_logout_sequence
+            calls. Matching logic and tag extraction were correct throughout.
+            Long/short break random wait behaviour confirmed unchanged.
 - v3.19.23: Reworked logout file generation. Reverts v3.19.20-22 scan/stitch
             approach. New design:
             1. build_logout_sequence now uses numeric prefix detection
@@ -980,7 +1002,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.23"
+VERSION = "v3.19.25"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -3847,113 +3869,73 @@ class VirtualDistQueue:
 # LOGOUT SEQUENCE BUILDER (Feature 40)
 # ============================================================================
 
-def _extract_skill_tag_from_logout_name(filename):
-    """
-    Extract skill-folder tag from logout slot filenames.
-    e.g. '4- open bank (6- smithing).json'  ->  '6- smithing'
-    Files with no parentheses are universal (apply to all folders).
-    Returns lowercase tag string, or None if universal.
-    """
-    _m = re.search(r'\(([^)]+)\)\s*(?:\.json)?\s*$', filename.lower())
-    return _m.group(1).strip() if _m else None
-
-
-def _logout_tag_matches_folder(skill_tag, folder_name):
-    """
-    Check if a logout file's skill tag matches the current skill folder.
-    Matches by leading number only: '6- smithing' matches '6- Smithing files'.
-    """
-    if not skill_tag or not folder_name:
-        return False
-    _tm = re.match(r'^(\d+)', skill_tag.strip())
-    _fm = re.match(r'^(\d+)', folder_name.strip())
-    if _tm and _fm:
-        return _tm.group(1) == _fm.group(1)
-    return skill_tag.lower() in folder_name.lower()
-
-
 def build_logout_sequence(folder_path, rng, out_path,
-                          wait_range_ms=(7200000.0, 16200000.0),
-                          skill_folder_name=None):
+                          wait_range_ms=(7200000.0, 16200000.0)):
     """
-    Build a strung logout sequence from the 'LOGOUT, wait, in' folder.
+    Build a strung logout sequence from a 'LOGOUT, wait, in' folder.
 
-    Files are assigned to slots by NUMERIC PREFIX (e.g. '2- wait.json' -> slot 2).
-    Sub-slots supported (e.g. '1.1-' sorts between 1 and 2).
+    Files are assigned to slots by NUMERIC PREFIX:
+      '0- close bank.json'  -> slot 0
+      '2- wait.json'        -> slot 2  (random wait appended here)
+      '4- open bank.json'   -> slot 4
 
-    Universal files   : no  parentheses in name  -> included in every build
-    Skill-specific    : has (skill-tag) in name  -> included only when
-                        skill_folder_name's leading number matches the tag
-                        e.g. '4- open bank (6- smithing).json' -> only for
-                        folders whose name starts with '6-'
+    Sub-slots (e.g. '1.1-') sort naturally between neighbours.
 
-    Random wait fires after the last 2.x slot:
-      wait_range_ms = (lo, hi)  ->  draw from rng.uniform(lo, hi)
-      wait_range_ms = None      ->  no wait (used for the fixed 01234 build)
+    wait_range_ms = (lo, hi)  ->  rng.uniform(lo, hi) appended after last 2.x slot
+    wait_range_ms = None      ->  no random wait (used for the fixed 0123 build)
 
-    Required: at least one slot with num < 2, one with 2 <= num < 3,
-              one with num >= 3.
+    The folder passed in determines what gets built -- the caller is
+    responsible for choosing the right folder (global or skill-specific).
+
+    Required: at least one slot < 2, one 2.x slot, one slot >= 3.
 
     Returns (out_path, slot_sequence_str) on success, (None, None) on failure.
-    slot_sequence_str is a compact string of all slot numbers used,
-    e.g. '01234' or '012345'.
+    slot_sequence_str: compact slot digits, e.g. '0123' or '01234'.
     """
     _json_files = sorted(folder_path.glob('*.json'))
     if not _json_files:
-        print(f"  [!] LOGOUT folder has no .json files — logout skipped")
+        print(f"  [!] LOGOUT folder has no .json files — skipped")
         return None, None
 
-    # --- Parse slot numbers ---
     def _slot_num(fname):
         _m = re.match(r'^(\d+(?:\.\d+)?)\s*[-\s]', fname.lower())
         return float(_m.group(1)) if _m else None
 
-    _universal     = {}   # float -> Path  (no skill tag)
-    _skill_matched = {}   # float -> Path  (tag matches current folder)
-    _skipped       = []
-
+    _numbered = {}
+    _skipped  = []
     for _f in _json_files:
         _n = _slot_num(_f.name)
         if _n is None:
             _skipped.append(_f.name)
             continue
-        _tag = _extract_skill_tag_from_logout_name(_f.name)
-        if _tag is None:
-            if _n in _universal:
-                print(f"  [!] LOGOUT: duplicate universal slot {_n} — keeping first")
-            else:
-                _universal[_n] = _f
+        if _n in _numbered:
+            print(f"  [!] LOGOUT: duplicate slot {_n} — keeping {_numbered[_n].name}")
         else:
-            if skill_folder_name and _logout_tag_matches_folder(_tag, skill_folder_name):
-                if _n in _skill_matched:
-                    print(f"  [!] LOGOUT: duplicate skill slot {_n} for '{_tag}' — keeping first")
-                else:
-                    _skill_matched[_n] = _f
+            _numbered[_n] = _f
 
     if _skipped:
         print(f"  [!] LOGOUT: no numeric prefix — skipped: {_skipped}")
 
-    _all_slots = {**_universal, **_skill_matched}
-    if not _all_slots:
-        print(f"  [!] LOGOUT: no applicable files found — logout skipped")
+    if not _numbered:
+        print(f"  [!] LOGOUT: no numbered files found — skipped")
         return None, None
 
-    _sorted_nums = sorted(_all_slots.keys())
+    _sorted_nums = sorted(_numbered.keys())
 
     _pre  = [n for n in _sorted_nums if n < 2.0]
     _wait = [n for n in _sorted_nums if 2.0 <= n < 3.0]
     _post = [n for n in _sorted_nums if n >= 3.0]
-    _missing = []
-    if not _pre:  _missing.append("slot < 2 (logout actions)")
-    if not _wait: _missing.append("slot 2.x (wait/idle file)")
-    if not _post: _missing.append("slot >= 3 (relogin actions)")
-    if _missing:
-        print(f"  [!] LOGOUT missing: {';'.join(_missing)} — logout skipped")
+    _miss = []
+    if not _pre:  _miss.append("slot < 2")
+    if not _wait: _miss.append("slot 2.x")
+    if not _post: _miss.append("slot >= 3")
+    if _miss:
+        print(f"  [!] LOGOUT missing: {';'.join(_miss)} — skipped")
         return None, None
 
     _wait_after = max(_wait)
 
-    def _load_slot(path):
+    def _load(path):
         try:
             _evts = json.loads(path.read_text(encoding='utf-8'))
         except Exception as _exc:
@@ -3969,9 +3951,9 @@ def build_logout_sequence(folder_path, rng, out_path,
 
     _loaded = {}
     for _n in _sorted_nums:
-        _evts = _load_slot(_all_slots[_n])
+        _evts = _load(_numbered[_n])
         if _evts is None:
-            print(f"  [!] LOGOUT: slot {_n} ({_all_slots[_n].name}) empty — logout skipped")
+            print(f"  [!] LOGOUT: slot {_n} ({_numbered[_n].name}) failed — skipped")
             return None, None
         _loaded[_n] = _evts
 
@@ -4009,21 +3991,17 @@ def build_logout_sequence(folder_path, rng, out_path,
         str(int(_n)) if _n == int(_n) else str(_n)
         for _n in _sorted_nums
     )
-
     _tot_min = int(_timeline / 60000)
     _tot_sec = int((_timeline % 60000) / 1000)
-    _w_min   = int(_wait_ms / 60000)
-    _w_sec   = int((_wait_ms % 60000) / 1000)
-
-    print(f"  Built LOGOUT sequence ({len(_sorted_nums)}-slot, slots: {_slot_seq}):")
+    _w_min   = int(_wait_ms  / 60000)
+    _w_sec   = int((_wait_ms  % 60000) / 1000)
+    print(f"  Built LOGOUT sequence (slots: {_slot_seq}, "
+          f"folder: {folder_path.name}):")
     for _n in _sorted_nums:
-        _suffix = f"  (+{_w_min}m {_w_sec}s random wait)" if _n == _wait_after and wait_range_ms else ""
-        print(f"    {_n}. {_all_slots[_n].name}{_suffix}")
-    if _skill_matched:
-        print(f"    [skill-specific for '{skill_folder_name}': "
-              f"{[_all_slots[n].name for n in sorted(_skill_matched.keys())]}]")
-    print(f"    Total: {_tot_min}m {_tot_sec}s  |  written -> {out_path.name}")
-
+        _sfx = f"  (+{_w_min}m {_w_sec}s random wait)" \
+               if _n == _wait_after and wait_range_ms is not None else ""
+        print(f"    {_n}. {_numbered[_n].name}{_sfx}")
+    print(f"    Total: {_tot_min}m {_tot_sec}s  |  -> {out_path.name}")
     return out_path, _slot_seq
 
 def main():
@@ -4120,6 +4098,7 @@ def main():
             break
 
     if _logout_folder:
+        _global_logout_folder = _logout_folder
         print(f"  Found LOGOUT folder: '{_logout_folder.name}'")
         print(f"  Long break (2h-4.5h) + Short break (30-90min) generated per output folder.")
     else:
@@ -4566,6 +4545,12 @@ def main():
         
         # Generate LONG BREAK + SHORT BREAK + fixed logout per folder.
         if _logout_folder:
+            # Use skill-folder-specific 'LOGOUT, wait, in' if present,
+            # otherwise fall back to the global one at input_macros level.
+            _active_logout = folder / "LOGOUT, wait, in"
+            if not _active_logout.is_dir():
+                _active_logout = _global_logout_folder
+
             _fl_rng = random.Random()
 
             _lo_long_p  = Path(args.output_root) / "- logout long break.json"
@@ -4573,17 +4558,14 @@ def main():
             _lo_fixed_p = Path(args.output_root) / "- logout fixed tmp.json"
 
             _long_built,  _ = build_logout_sequence(
-                _logout_folder, _fl_rng, _lo_long_p,
-                wait_range_ms=(7200000.0, 16200000.0),
-                skill_folder_name=folder.name)
+                _active_logout, _fl_rng, _lo_long_p,
+                wait_range_ms=(7200000.0, 16200000.0))
             _short_built, _ = build_logout_sequence(
-                _logout_folder, _fl_rng, _lo_short_p,
-                wait_range_ms=(1800000.0, 5400000.0),
-                skill_folder_name=folder.name)
+                _active_logout, _fl_rng, _lo_short_p,
+                wait_range_ms=(1800000.0, 5400000.0))
             _fixed_built, _fixed_slots = build_logout_sequence(
-                _logout_folder, _fl_rng, _lo_fixed_p,
-                wait_range_ms=None,
-                skill_folder_name=folder.name)
+                _active_logout, _fl_rng, _lo_fixed_p,
+                wait_range_ms=None)
 
             if _long_built:
                 try:
@@ -4600,14 +4582,15 @@ def main():
                     print(f"  [!] Error copying short break: {_e}")
 
             if _fixed_built and _fixed_slots:
-                _fixed_dest = out_folder / f"@ {_fixed_slots} Proper logout+wait+RELOGIN.json"
+                _fixed_dest = out_folder / \
+                    f"@ {_fixed_slots} Proper logout+wait+RELOGIN.json"
                 try:
                     shutil.copy2(_fixed_built, _fixed_dest)
                     print(f"  ✓ Built: {_fixed_dest.name}")
                 except Exception as _e:
                     print(f"  [!] Error writing fixed logout: {_e}")
 
-        # @ Final logout.json — still copied from repo root unchanged
+        # @ Final logout.json -- still copied from repo root, unchanged
         _final_src = search_base.parent / "- Final logout.json"
         if _final_src.exists():
             try:
@@ -4781,7 +4764,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.23"
+VERSION = "v3.19.25"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -8257,113 +8240,73 @@ class VirtualDistQueue:
 # LOGOUT SEQUENCE BUILDER (Feature 40)
 # ============================================================================
 
-def _extract_skill_tag_from_logout_name(filename):
-    """
-    Extract skill-folder tag from logout slot filenames.
-    e.g. '4- open bank (6- smithing).json'  ->  '6- smithing'
-    Files with no parentheses are universal (apply to all folders).
-    Returns lowercase tag string, or None if universal.
-    """
-    _m = re.search(r'\(([^)]+)\)\s*(?:\.json)?\s*$', filename.lower())
-    return _m.group(1).strip() if _m else None
-
-
-def _logout_tag_matches_folder(skill_tag, folder_name):
-    """
-    Check if a logout file's skill tag matches the current skill folder.
-    Matches by leading number only: '6- smithing' matches '6- Smithing files'.
-    """
-    if not skill_tag or not folder_name:
-        return False
-    _tm = re.match(r'^(\d+)', skill_tag.strip())
-    _fm = re.match(r'^(\d+)', folder_name.strip())
-    if _tm and _fm:
-        return _tm.group(1) == _fm.group(1)
-    return skill_tag.lower() in folder_name.lower()
-
-
 def build_logout_sequence(folder_path, rng, out_path,
-                          wait_range_ms=(7200000.0, 16200000.0),
-                          skill_folder_name=None):
+                          wait_range_ms=(7200000.0, 16200000.0)):
     """
-    Build a strung logout sequence from the 'LOGOUT, wait, in' folder.
+    Build a strung logout sequence from a 'LOGOUT, wait, in' folder.
 
-    Files are assigned to slots by NUMERIC PREFIX (e.g. '2- wait.json' -> slot 2).
-    Sub-slots supported (e.g. '1.1-' sorts between 1 and 2).
+    Files are assigned to slots by NUMERIC PREFIX:
+      '0- close bank.json'  -> slot 0
+      '2- wait.json'        -> slot 2  (random wait appended here)
+      '4- open bank.json'   -> slot 4
 
-    Universal files   : no  parentheses in name  -> included in every build
-    Skill-specific    : has (skill-tag) in name  -> included only when
-                        skill_folder_name's leading number matches the tag
-                        e.g. '4- open bank (6- smithing).json' -> only for
-                        folders whose name starts with '6-'
+    Sub-slots (e.g. '1.1-') sort naturally between neighbours.
 
-    Random wait fires after the last 2.x slot:
-      wait_range_ms = (lo, hi)  ->  draw from rng.uniform(lo, hi)
-      wait_range_ms = None      ->  no wait (used for the fixed 01234 build)
+    wait_range_ms = (lo, hi)  ->  rng.uniform(lo, hi) appended after last 2.x slot
+    wait_range_ms = None      ->  no random wait (used for the fixed 0123 build)
 
-    Required: at least one slot with num < 2, one with 2 <= num < 3,
-              one with num >= 3.
+    The folder passed in determines what gets built -- the caller is
+    responsible for choosing the right folder (global or skill-specific).
+
+    Required: at least one slot < 2, one 2.x slot, one slot >= 3.
 
     Returns (out_path, slot_sequence_str) on success, (None, None) on failure.
-    slot_sequence_str is a compact string of all slot numbers used,
-    e.g. '01234' or '012345'.
+    slot_sequence_str: compact slot digits, e.g. '0123' or '01234'.
     """
     _json_files = sorted(folder_path.glob('*.json'))
     if not _json_files:
-        print(f"  [!] LOGOUT folder has no .json files — logout skipped")
+        print(f"  [!] LOGOUT folder has no .json files — skipped")
         return None, None
 
-    # --- Parse slot numbers ---
     def _slot_num(fname):
         _m = re.match(r'^(\d+(?:\.\d+)?)\s*[-\s]', fname.lower())
         return float(_m.group(1)) if _m else None
 
-    _universal     = {}   # float -> Path  (no skill tag)
-    _skill_matched = {}   # float -> Path  (tag matches current folder)
-    _skipped       = []
-
+    _numbered = {}
+    _skipped  = []
     for _f in _json_files:
         _n = _slot_num(_f.name)
         if _n is None:
             _skipped.append(_f.name)
             continue
-        _tag = _extract_skill_tag_from_logout_name(_f.name)
-        if _tag is None:
-            if _n in _universal:
-                print(f"  [!] LOGOUT: duplicate universal slot {_n} — keeping first")
-            else:
-                _universal[_n] = _f
+        if _n in _numbered:
+            print(f"  [!] LOGOUT: duplicate slot {_n} — keeping {_numbered[_n].name}")
         else:
-            if skill_folder_name and _logout_tag_matches_folder(_tag, skill_folder_name):
-                if _n in _skill_matched:
-                    print(f"  [!] LOGOUT: duplicate skill slot {_n} for '{_tag}' — keeping first")
-                else:
-                    _skill_matched[_n] = _f
+            _numbered[_n] = _f
 
     if _skipped:
         print(f"  [!] LOGOUT: no numeric prefix — skipped: {_skipped}")
 
-    _all_slots = {**_universal, **_skill_matched}
-    if not _all_slots:
-        print(f"  [!] LOGOUT: no applicable files found — logout skipped")
+    if not _numbered:
+        print(f"  [!] LOGOUT: no numbered files found — skipped")
         return None, None
 
-    _sorted_nums = sorted(_all_slots.keys())
+    _sorted_nums = sorted(_numbered.keys())
 
     _pre  = [n for n in _sorted_nums if n < 2.0]
     _wait = [n for n in _sorted_nums if 2.0 <= n < 3.0]
     _post = [n for n in _sorted_nums if n >= 3.0]
-    _missing = []
-    if not _pre:  _missing.append("slot < 2 (logout actions)")
-    if not _wait: _missing.append("slot 2.x (wait/idle file)")
-    if not _post: _missing.append("slot >= 3 (relogin actions)")
-    if _missing:
-        print(f"  [!] LOGOUT missing: {';'.join(_missing)} — logout skipped")
+    _miss = []
+    if not _pre:  _miss.append("slot < 2")
+    if not _wait: _miss.append("slot 2.x")
+    if not _post: _miss.append("slot >= 3")
+    if _miss:
+        print(f"  [!] LOGOUT missing: {';'.join(_miss)} — skipped")
         return None, None
 
     _wait_after = max(_wait)
 
-    def _load_slot(path):
+    def _load(path):
         try:
             _evts = json.loads(path.read_text(encoding='utf-8'))
         except Exception as _exc:
@@ -8379,9 +8322,9 @@ def build_logout_sequence(folder_path, rng, out_path,
 
     _loaded = {}
     for _n in _sorted_nums:
-        _evts = _load_slot(_all_slots[_n])
+        _evts = _load(_numbered[_n])
         if _evts is None:
-            print(f"  [!] LOGOUT: slot {_n} ({_all_slots[_n].name}) empty — logout skipped")
+            print(f"  [!] LOGOUT: slot {_n} ({_numbered[_n].name}) failed — skipped")
             return None, None
         _loaded[_n] = _evts
 
@@ -8419,21 +8362,17 @@ def build_logout_sequence(folder_path, rng, out_path,
         str(int(_n)) if _n == int(_n) else str(_n)
         for _n in _sorted_nums
     )
-
     _tot_min = int(_timeline / 60000)
     _tot_sec = int((_timeline % 60000) / 1000)
-    _w_min   = int(_wait_ms / 60000)
-    _w_sec   = int((_wait_ms % 60000) / 1000)
-
-    print(f"  Built LOGOUT sequence ({len(_sorted_nums)}-slot, slots: {_slot_seq}):")
+    _w_min   = int(_wait_ms  / 60000)
+    _w_sec   = int((_wait_ms  % 60000) / 1000)
+    print(f"  Built LOGOUT sequence (slots: {_slot_seq}, "
+          f"folder: {folder_path.name}):")
     for _n in _sorted_nums:
-        _suffix = f"  (+{_w_min}m {_w_sec}s random wait)" if _n == _wait_after and wait_range_ms else ""
-        print(f"    {_n}. {_all_slots[_n].name}{_suffix}")
-    if _skill_matched:
-        print(f"    [skill-specific for '{skill_folder_name}': "
-              f"{[_all_slots[n].name for n in sorted(_skill_matched.keys())]}]")
-    print(f"    Total: {_tot_min}m {_tot_sec}s  |  written -> {out_path.name}")
-
+        _sfx = f"  (+{_w_min}m {_w_sec}s random wait)" \
+               if _n == _wait_after and wait_range_ms is not None else ""
+        print(f"    {_n}. {_numbered[_n].name}{_sfx}")
+    print(f"    Total: {_tot_min}m {_tot_sec}s  |  -> {out_path.name}")
     return out_path, _slot_seq
 
 def main():
@@ -8530,6 +8469,7 @@ def main():
             break
 
     if _logout_folder:
+        _global_logout_folder = _logout_folder
         print(f"  Found LOGOUT folder: '{_logout_folder.name}'")
         print(f"  Long break (2h-4.5h) + Short break (30-90min) generated per output folder.")
     else:
@@ -8976,6 +8916,12 @@ def main():
         
         # Generate LONG BREAK + SHORT BREAK + fixed logout per folder.
         if _logout_folder:
+            # Use skill-folder-specific 'LOGOUT, wait, in' if present,
+            # otherwise fall back to the global one at input_macros level.
+            _active_logout = folder / "LOGOUT, wait, in"
+            if not _active_logout.is_dir():
+                _active_logout = _global_logout_folder
+
             _fl_rng = random.Random()
 
             _lo_long_p  = Path(args.output_root) / "- logout long break.json"
@@ -8983,17 +8929,14 @@ def main():
             _lo_fixed_p = Path(args.output_root) / "- logout fixed tmp.json"
 
             _long_built,  _ = build_logout_sequence(
-                _logout_folder, _fl_rng, _lo_long_p,
-                wait_range_ms=(7200000.0, 16200000.0),
-                skill_folder_name=folder.name)
+                _active_logout, _fl_rng, _lo_long_p,
+                wait_range_ms=(7200000.0, 16200000.0))
             _short_built, _ = build_logout_sequence(
-                _logout_folder, _fl_rng, _lo_short_p,
-                wait_range_ms=(1800000.0, 5400000.0),
-                skill_folder_name=folder.name)
+                _active_logout, _fl_rng, _lo_short_p,
+                wait_range_ms=(1800000.0, 5400000.0))
             _fixed_built, _fixed_slots = build_logout_sequence(
-                _logout_folder, _fl_rng, _lo_fixed_p,
-                wait_range_ms=None,
-                skill_folder_name=folder.name)
+                _active_logout, _fl_rng, _lo_fixed_p,
+                wait_range_ms=None)
 
             if _long_built:
                 try:
@@ -9010,14 +8953,15 @@ def main():
                     print(f"  [!] Error copying short break: {_e}")
 
             if _fixed_built and _fixed_slots:
-                _fixed_dest = out_folder / f"@ {_fixed_slots} Proper logout+wait+RELOGIN.json"
+                _fixed_dest = out_folder / \
+                    f"@ {_fixed_slots} Proper logout+wait+RELOGIN.json"
                 try:
                     shutil.copy2(_fixed_built, _fixed_dest)
                     print(f"  ✓ Built: {_fixed_dest.name}")
                 except Exception as _e:
                     print(f"  [!] Error writing fixed logout: {_e}")
 
-        # @ Final logout.json — still copied from repo root unchanged
+        # @ Final logout.json -- still copied from repo root, unchanged
         _final_src = search_base.parent / "- Final logout.json"
         if _final_src.exists():
             try:
