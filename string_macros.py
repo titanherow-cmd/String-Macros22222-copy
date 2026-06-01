@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.29
+  Current version: v3.19.25
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,51 +392,6 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
-- v3.19.29: Reverted v3.19.28 _active_logout variable fix — it was wrong.
-            The outer loop `for folder in sorted(search_base.iterdir()):`
-            at line 4323 makes `folder` the skill folder Path (e.g.
-            '6- Smithing files/'). The `_active_logout` check is nested
-            inside that loop so `folder` is in scope and correct.
-            `folder_data['path']` (changed to in v3.19.28) points to a
-            per-version subfolder path, not the skill folder — so
-            `_active_logout.is_dir()` always returned False and all
-            builds fell back to the global LOGOUT folder.
-            Feature confirmed working in v3.19.25 with `folder`; this
-            restores that behaviour.
-- v3.19.28: Fixed skill-specific LOGOUT detection using wrong variable.
-            Active main() loop variable is `folder_data` (dict), not
-            `folder` (Path). `folder_data['path']` is the skill folder
-            Path. Using bare `folder` evaluated to wrong/outer scope
-            value, so `_active_logout.is_dir()` always returned False
-            and all folders fell back to the global LOGOUT folder.
-            Fix: replace `folder / "LOGOUT, wait, in"` with
-            `folder_data['path'] / "LOGOUT, wait, in"` in both copies.
-- v3.19.27: Part D threshold raised from 20ms to 25ms. Caught 22ms
-            MM->DE gaps in CBD__50_ and CBD__9_ (recording artifacts
-            where cursor barely moves during click hold, 2ms above
-            old threshold).
-            Part F added: settling MM inserted when MM->click gap
-            > 1000ms (outside jitter exclusion zone). Fixes CBD__30_
-            (1807ms) and FMFcraftdia__62_ DS[110] (1022ms).
-            Part E extended to clamp OOB RightDown/DragStart/LeftDown
-            click events. Fixes FMFcraftdia__62_ RightDown at Y=39
-            (browser chrome) which caused game defocus at 69% of file,
-            making second half of clicks fail in strung playback.
-            Fixed LOGOUT, wait, in being scanned as a skill subfolder.
-            Fixed LOGOUT skill-specific folder detection regression
-            (must use outer loop folder variable, not per-version).
-            Applied to both copies.
-- v3.19.26: Raised Part E _OOB_SAFE_Y_MIN from 50 to 80.
-            ROOT CAUSE (CBD__5_.json): cursor parked at Y=57 for 9820ms
-            -- slipped through Part E (Y=57 > old threshold of 50 by 7px).
-            Intra-file pause extended idle to ~12.5s at Y=57, causing game
-            window defocus before final click at (945,357). Threshold 80
-            catches Y=21 (SRADM), Y=57 (this file), leaves Y=80+ intact.
-            Only affects cursors PARKED in gaps >= _OOB_IDLE_GATE (1000ms).
-            ALSO: '- Quick logout wait RELOGIN.json' at repo root is now
-            copied to all output folders as '@ Quick logout wait RELOGIN.json'
-            alongside '@ Final logout.json'. Same copy-with-prefix pattern.
-            Applied to both copies.
 - v3.19.25: Reverted skill-specific logout approach (v3.19.20-24).
             New design: if a skill folder (e.g. '6- Smithing files/')
             contains its own 'LOGOUT, wait, in' subfolder, that folder
@@ -1047,7 +1002,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.29"
+VERSION = "v3.19.25"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -2384,8 +2339,8 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # A DragEnd firing at the same timestamp as the preceding MouseMove
         # causes the button-release to register mid-movement.
         # Shift it forward so the release always lands after the cursor settles.
-        _DRAG_END_SETTLE_THRESHOLD = 25   # ms raised from 20 — catches 22ms recording
-        _DRAG_END_SETTLE_TARGET    = 25   # artifacts where cursor barely moves during hold
+        _DRAG_END_SETTLE_THRESHOLD = 20   # ms - gaps below this trigger the fix
+        _DRAG_END_SETTLE_TARGET    = 20   # ms - minimum gap to enforce after shift
 
         for _di in range(1, len(events)):
             if events[_di].get('Type') != 'DragEnd':
@@ -2404,10 +2359,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # (OS/browser responds to cursor entering title bar / system UI area).
         # If an out-of-bounds MM is followed by a long idle (cursor parked
         # there), replace its coords with the last known safe position.
-        _OOB_SAFE_Y_MIN  = 80    # raised from 50: catches cursor parking at Y=57-79
-                                  # (browser chrome / top OS UI area). Only affects
-                                  # cursors PARKED in idle gaps >= _OOB_IDLE_GATE --
-                                  # active movement through Y<80 is never clamped.
+        _OOB_SAFE_Y_MIN  = 50    # anything above this is browser chrome / title bar
         _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
         _OOB_SAFE_X_MIN  = 0
         _OOB_SAFE_X_MAX  = 1920
@@ -2432,51 +2384,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                 if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
                     events[_ei]['X'] = _last_safe_x
                     events[_ei]['Y'] = _last_safe_y
-
-            # Also clamp click events whose coords are OOB — these fire in
-            # browser chrome rather than the game window.
-            if (not _in_bounds
-                    and events[_ei].get('Type') in {'RightDown', 'RightUp',
-                                                     'DragStart', 'LeftDown'}
-                    and _last_safe_x is not None):
-                events[_ei]['X'] = _last_safe_x
-                events[_ei]['Y'] = _last_safe_y
-                print(f"  [Part E] Clamped OOB click {events[_ei]['Type']} "
-                      f"({_ex},{_ey})->({_last_safe_x},{_last_safe_y})")
         # --- end Part E ---
-        # --- Part F: long-gap settling MM ---
-        # When the last MM before a click is > 1000ms ago, it falls outside the
-        # jitter exclusion zone and may have been modified. Insert a settling MM
-        # at the click's exact coordinates 15ms before the click — this MM is
-        # within 1000ms of the click and therefore jitter-protected.
-        # No time shift needed (unlike Part A); cursor repositioning only.
-        _LONG_GAP_SETTLE_MS = 1000   # ms — beyond this, last MM may be jitterable
-
-        for _fi in range(1, len(events)):
-            if events[_fi].get('Type') not in _CLICK_TYPES:
-                continue
-            if events[_fi - 1].get('Type') != 'MouseMove':
-                continue
-            _fg = events[_fi].get('Time', 0) - events[_fi - 1].get('Time', 0)
-            if _fg <= _LONG_GAP_SETTLE_MS:
-                continue
-            _fx = events[_fi].get('X')
-            _fy = events[_fi].get('Y')
-            if _fx is None or _fy is None:
-                continue
-            _f_settle = {
-                'Type':    'MouseMove',
-                'Time':    events[_fi]['Time'] - _SETTLE_BEFORE_CLICK,
-                'X':       _fx,
-                'Y':       _fy,
-                'Delta':   None,
-                'KeyCode': None,
-            }
-            events.insert(_fi, _f_settle)
-            # _fi now points to settling MM; click is at _fi+1.
-            # Outer loop continues past both safely.
-        # --- end Part F ---
-
 
 
         # Check if dmwm file
@@ -3381,10 +3289,6 @@ def scan_for_numbered_subfolders(base_path):
         # Check for "Don't use features on me" folder (case-insensitive)
         # Also accepts old name "dont mess with me" for backward compatibility
         folder_name_lower = item.name.lower()
-        # Skip skill-specific logout folder — handled separately by build_logout_sequence
-        if folder_name_lower == 'logout, wait, in':
-            continue
-
         if folder_name_lower == "don't use features on me" or folder_name_lower == "dont mess with me":
             # Add all JSON files from this folder as unmodified
             dmwm_files = sorted(item.glob("*.json"))
@@ -4687,19 +4591,13 @@ def main():
                     print(f"  [!] Error writing fixed logout: {_e}")
 
         # @ Final logout.json -- still copied from repo root, unchanged
-        for _repo_fixed in [
-            "- Final logout.json",
-            "- Quick logout wait RELOGIN.json",
-        ]:
-            _rf_src = search_base.parent / _repo_fixed
-            if not _rf_src.exists():
-                continue
-            _rf_dest = "@ " + _repo_fixed[1:].lstrip()
+        _final_src = search_base.parent / "- Final logout.json"
+        if _final_src.exists():
             try:
-                shutil.copy2(_rf_src, out_folder / _rf_dest)
-                print(f"  ✓ Copied fixed logout: {_rf_dest}")
+                shutil.copy2(_final_src, out_folder / "@ Final logout.json")
+                print(f"  ✓ Copied fixed logout: @ Final logout.json")
             except Exception as _e:
-                print(f"  [!] Error copying {_repo_fixed}: {_e}")
+                print(f"  [!] Error copying Final logout: {_e}")
         # Copy non-JSON files with @ prefix (images, txt, etc — not temp/part files)
         _NONJSON_SKIP_EXTS = {".part", ".tmp", ".bak", ".swp", ".ds_store"}
         for non_json_file in non_json_files:
@@ -4866,7 +4764,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.29"
+VERSION = "v3.19.25"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -6812,8 +6710,8 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # A DragEnd firing at the same timestamp as the preceding MouseMove
         # causes the button-release to register mid-movement.
         # Shift it forward so the release always lands after the cursor settles.
-        _DRAG_END_SETTLE_THRESHOLD = 25   # ms raised from 20 — catches 22ms recording
-        _DRAG_END_SETTLE_TARGET    = 25   # artifacts where cursor barely moves during hold
+        _DRAG_END_SETTLE_THRESHOLD = 20   # ms - gaps below this trigger the fix
+        _DRAG_END_SETTLE_TARGET    = 20   # ms - minimum gap to enforce after shift
 
         for _di in range(1, len(events)):
             if events[_di].get('Type') != 'DragEnd':
@@ -6832,10 +6730,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # (OS/browser responds to cursor entering title bar / system UI area).
         # If an out-of-bounds MM is followed by a long idle (cursor parked
         # there), replace its coords with the last known safe position.
-        _OOB_SAFE_Y_MIN  = 80    # raised from 50: catches cursor parking at Y=57-79
-                                  # (browser chrome / top OS UI area). Only affects
-                                  # cursors PARKED in idle gaps >= _OOB_IDLE_GATE --
-                                  # active movement through Y<80 is never clamped.
+        _OOB_SAFE_Y_MIN  = 50    # anything above this is browser chrome / title bar
         _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
         _OOB_SAFE_X_MIN  = 0
         _OOB_SAFE_X_MAX  = 1920
@@ -6860,51 +6755,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                 if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
                     events[_ei]['X'] = _last_safe_x
                     events[_ei]['Y'] = _last_safe_y
-
-            # Also clamp click events whose coords are OOB — these fire in
-            # browser chrome rather than the game window.
-            if (not _in_bounds
-                    and events[_ei].get('Type') in {'RightDown', 'RightUp',
-                                                     'DragStart', 'LeftDown'}
-                    and _last_safe_x is not None):
-                events[_ei]['X'] = _last_safe_x
-                events[_ei]['Y'] = _last_safe_y
-                print(f"  [Part E] Clamped OOB click {events[_ei]['Type']} "
-                      f"({_ex},{_ey})->({_last_safe_x},{_last_safe_y})")
         # --- end Part E ---
-        # --- Part F: long-gap settling MM ---
-        # When the last MM before a click is > 1000ms ago, it falls outside the
-        # jitter exclusion zone and may have been modified. Insert a settling MM
-        # at the click's exact coordinates 15ms before the click — this MM is
-        # within 1000ms of the click and therefore jitter-protected.
-        # No time shift needed (unlike Part A); cursor repositioning only.
-        _LONG_GAP_SETTLE_MS = 1000   # ms — beyond this, last MM may be jitterable
-
-        for _fi in range(1, len(events)):
-            if events[_fi].get('Type') not in _CLICK_TYPES:
-                continue
-            if events[_fi - 1].get('Type') != 'MouseMove':
-                continue
-            _fg = events[_fi].get('Time', 0) - events[_fi - 1].get('Time', 0)
-            if _fg <= _LONG_GAP_SETTLE_MS:
-                continue
-            _fx = events[_fi].get('X')
-            _fy = events[_fi].get('Y')
-            if _fx is None or _fy is None:
-                continue
-            _f_settle = {
-                'Type':    'MouseMove',
-                'Time':    events[_fi]['Time'] - _SETTLE_BEFORE_CLICK,
-                'X':       _fx,
-                'Y':       _fy,
-                'Delta':   None,
-                'KeyCode': None,
-            }
-            events.insert(_fi, _f_settle)
-            # _fi now points to settling MM; click is at _fi+1.
-            # Outer loop continues past both safely.
-        # --- end Part F ---
-
 
 
         # Check if dmwm file
@@ -7809,10 +7660,6 @@ def scan_for_numbered_subfolders(base_path):
         # Check for "Don't use features on me" folder (case-insensitive)
         # Also accepts old name "dont mess with me" for backward compatibility
         folder_name_lower = item.name.lower()
-        # Skip skill-specific logout folder — handled separately by build_logout_sequence
-        if folder_name_lower == 'logout, wait, in':
-            continue
-
         if folder_name_lower == "don't use features on me" or folder_name_lower == "dont mess with me":
             # Add all JSON files from this folder as unmodified
             dmwm_files = sorted(item.glob("*.json"))
@@ -9115,19 +8962,13 @@ def main():
                     print(f"  [!] Error writing fixed logout: {_e}")
 
         # @ Final logout.json -- still copied from repo root, unchanged
-        for _repo_fixed in [
-            "- Final logout.json",
-            "- Quick logout wait RELOGIN.json",
-        ]:
-            _rf_src = search_base.parent / _repo_fixed
-            if not _rf_src.exists():
-                continue
-            _rf_dest = "@ " + _repo_fixed[1:].lstrip()
+        _final_src = search_base.parent / "- Final logout.json"
+        if _final_src.exists():
             try:
-                shutil.copy2(_rf_src, out_folder / _rf_dest)
-                print(f"  ✓ Copied fixed logout: {_rf_dest}")
+                shutil.copy2(_final_src, out_folder / "@ Final logout.json")
+                print(f"  ✓ Copied fixed logout: @ Final logout.json")
             except Exception as _e:
-                print(f"  [!] Error copying {_repo_fixed}: {_e}")
+                print(f"  [!] Error copying Final logout: {_e}")
         # Copy non-JSON files with @ prefix (images, txt, etc — not temp/part files)
         _NONJSON_SKIP_EXTS = {".part", ".tmp", ".bak", ".swp", ".ds_store"}
         for non_json_file in non_json_files:
