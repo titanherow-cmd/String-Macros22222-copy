@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.27
+  Current version: v3.19.28
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,14 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.28: Fixed skill-specific LOGOUT detection using wrong variable.
+            Active main() loop variable is `folder_data` (dict), not
+            `folder` (Path). `folder_data['path']` is the skill folder
+            Path. Using bare `folder` evaluated to wrong/outer scope
+            value, so `_active_logout.is_dir()` always returned False
+            and all folders fell back to the global LOGOUT folder.
+            Fix: replace `folder / "LOGOUT, wait, in"` with
+            `folder_data['path'] / "LOGOUT, wait, in"` in both copies.
 - v3.19.27: Part D threshold raised from 20ms to 25ms. Caught 22ms
             MM->DE gaps in CBD__50_ and CBD__9_ (recording artifacts
             where cursor barely moves during click hold, 2ms above
@@ -1028,7 +1036,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.27"
+VERSION = "v3.19.28"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -4624,7 +4632,7 @@ def main():
         if _logout_folder:
             # Use skill-folder-specific 'LOGOUT, wait, in' if present,
             # otherwise fall back to the global one at input_macros level.
-            _active_logout = folder / "LOGOUT, wait, in"
+            _active_logout = folder_data['path'] / "LOGOUT, wait, in"
             if not _active_logout.is_dir():
                 _active_logout = _global_logout_folder
 
@@ -4847,7 +4855,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.27"
+VERSION = "v3.19.28"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -9052,7 +9060,7 @@ def main():
         if _logout_folder:
             # Use skill-folder-specific 'LOGOUT, wait, in' if present,
             # otherwise fall back to the global one at input_macros level.
-            _active_logout = folder / "LOGOUT, wait, in"
+            _active_logout = folder_data['path'] / "LOGOUT, wait, in"
             if not _active_logout.is_dir():
                 _active_logout = _global_logout_folder
 
