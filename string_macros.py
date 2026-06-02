@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.30
+  Current version: v3.19.31
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,7 +392,18 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
-- v3.19.30: Redesigned logout system. New folder structure:
+- v3.19.31: Fixed logout extras never attaching (v3.19.30 bug).
+            ROOT CAUSE 1: used `folder.name` (undefined in loop scope)
+            instead of `folder_data['name']` (the actual loop dict key).
+            ROOT CAUSE 2: exact name match only — '6- Smithing files'
+            would never match '@ logout_extras/6- Smithing/'.
+            FIX: leading-number match — extract digits from
+            folder_data['name'] (e.g. '6') and check all subfolders in
+            '@ logout_extras/' for same leading number. Exact name match
+            tried first as fast path; leading-number fallback catches any
+            naming variation. Diagnostic print always shows what matched
+            or why it didn't (folder name + leading num shown).
+- v3.19.30: Redesigned logout system with @ logout_base / @ logout_extras.
               input_macros/@ logout_base/   -- numbered base slot files
               input_macros/@ logout_extras/<SkillName>/ -- optional extras
             build_logout_sequence now takes base_folder_path + optional
@@ -1062,7 +1073,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.30"
+VERSION = "v3.19.31"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -4681,13 +4692,36 @@ def main():
         
         # Generate LONG BREAK + SHORT BREAK + fixed logout per folder.
         if _base_logout_folder:
-            # Skill-specific extras: @ logout_extras/<skill_folder_name>/
-            _extras_folder = search_base / "@ logout_extras" / folder.name
-            if not _extras_folder.is_dir():
-                _extras_folder = None
+            # Find extras folder by leading number match against folder_data['name'].
+            # e.g. folder_data['name'] = '6- Smithing files' -> leading num = '6'
+            # Matches '@ logout_extras/6- Smithing/' OR '@ logout_extras/6- Smithing files/'
+            # Exact name match tried first, then leading-number fallback.
+            _extras_base = search_base / "@ logout_extras"
+            _extras_folder = None
+            _fn_m = re.match(r'^(\d+)', folder_data['name'])
+            _fn_num = _fn_m.group(1) if _fn_m else None
+
+            if _extras_base.is_dir():
+                # Pass 1: exact name match
+                _exact = _extras_base / folder_data['name']
+                if _exact.is_dir():
+                    _extras_folder = _exact
+                # Pass 2: leading-number match (catches name mismatches)
+                elif _fn_num:
+                    for _xd in sorted(_extras_base.iterdir()):
+                        if not _xd.is_dir():
+                            continue
+                        _xm = re.match(r'^(\d+)', _xd.name)
+                        if _xm and _xm.group(1) == _fn_num:
+                            _extras_folder = _xd
+                            break
 
             if _extras_folder:
-                print(f"  Logout extras: '{_extras_folder.name}' ({len(list(_extras_folder.glob('*.json')))} files)")
+                _xcount = len(list(_extras_folder.glob('*.json')))
+                print(f"  Logout extras: '{_extras_folder.name}' ({_xcount} file(s))")
+            else:
+                if _extras_base.is_dir():
+                    print(f"  Logout extras: none for '{folder_data['name']}' (num={_fn_num})")
 
             _fl_rng = random.Random()
 
@@ -4910,7 +4944,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.30"
+VERSION = "v3.19.31"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -9138,13 +9172,36 @@ def main():
         
         # Generate LONG BREAK + SHORT BREAK + fixed logout per folder.
         if _base_logout_folder:
-            # Skill-specific extras: @ logout_extras/<skill_folder_name>/
-            _extras_folder = search_base / "@ logout_extras" / folder.name
-            if not _extras_folder.is_dir():
-                _extras_folder = None
+            # Find extras folder by leading number match against folder_data['name'].
+            # e.g. folder_data['name'] = '6- Smithing files' -> leading num = '6'
+            # Matches '@ logout_extras/6- Smithing/' OR '@ logout_extras/6- Smithing files/'
+            # Exact name match tried first, then leading-number fallback.
+            _extras_base = search_base / "@ logout_extras"
+            _extras_folder = None
+            _fn_m = re.match(r'^(\d+)', folder_data['name'])
+            _fn_num = _fn_m.group(1) if _fn_m else None
+
+            if _extras_base.is_dir():
+                # Pass 1: exact name match
+                _exact = _extras_base / folder_data['name']
+                if _exact.is_dir():
+                    _extras_folder = _exact
+                # Pass 2: leading-number match (catches name mismatches)
+                elif _fn_num:
+                    for _xd in sorted(_extras_base.iterdir()):
+                        if not _xd.is_dir():
+                            continue
+                        _xm = re.match(r'^(\d+)', _xd.name)
+                        if _xm and _xm.group(1) == _fn_num:
+                            _extras_folder = _xd
+                            break
 
             if _extras_folder:
-                print(f"  Logout extras: '{_extras_folder.name}' ({len(list(_extras_folder.glob('*.json')))} files)")
+                _xcount = len(list(_extras_folder.glob('*.json')))
+                print(f"  Logout extras: '{_extras_folder.name}' ({_xcount} file(s))")
+            else:
+                if _extras_base.is_dir():
+                    print(f"  Logout extras: none for '{folder_data['name']}' (num={_fn_num})")
 
             _fl_rng = random.Random()
 
