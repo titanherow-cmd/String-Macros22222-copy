@@ -1,4 +1,4 @@
-name: "String macros (v3.19.33 - Flat 7z + Hidden Path Mapping)"
+name: String macros (v3.18.88 - 7z compression + subfolder filtering)
 
 on:
   workflow_dispatch:
@@ -11,34 +11,44 @@ on:
         options:
           - 'ALL FOLDERS'
           - '-- none --'
-          # --- Woodcutting ---
           - '1- Woodcutting files'
-          - '11- woodcuting oaks'
-          - '12- wooducting teaks'
-          # --- Crafting / Firemaking / Cooking / Fishing ---
+          - 'x'
           - '2- Crafting files'
+          - 'x'
           - '3- Firemaking files'
           - '5- FM- NoFire Zspotfire busy world- GE- intz- W- TIME SENSITIVE'
           - '4- Cooking files'
+          - 'x'
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
-          - 'FM+COOK straight spot - TIME SENSITIVE'
-          # --- Smithing ---
-          - '6- Smithing files'
+          - 'x'
           - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - 'Finish up noted smth alch leftover'
           - '58- Smth R2H only- Varr- zoomanvil left- W'
+          - 'F4- a full merge file'
+          - 'x'
+          - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
           - '61- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
           - '69- Pl8 smth by spacebar'
-          - 'F4- a full merge file'
-          # --- Mining ---
+          - 'FM+COOK straight spot - TIME SENSITIVE'
           - '7- Mining files'
           - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
           - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
-
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'        
+          - 'x'
+          - 'x'
+          - 'x'         
+          - 'x'
+          - 'x'
+          - 'x'
+          
       folder_2:
         description: 'Folder 2'
         required: false
@@ -47,32 +57,43 @@ on:
         options:
           - 'ALL FOLDERS'
           - '-- none --'
-          # --- Woodcutting ---
           - '1- Woodcutting files'
-          - '11- woodcuting oaks'
-          - '12- wooducting teaks'
-          # --- Crafting / Firemaking / Cooking / Fishing ---
+          - 'x'
           - '2- Crafting files'
+          - 'x'
           - '3- Firemaking files'
+          - 'x'
           - '4- Cooking files'
+          - 'x'
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
-          - 'FM+COOK straight spot - TIME SENSITIVE'
-          # --- Smithing ---
-          - '6- Smithing files'
+          - 'x'
           - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - 'Finish up noted smth alch leftover'
           - '58- Smth R2H only- Varr- zoomanvil left- W'
+          - 'F4- a full merge file'
+          - 'x'
+          - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
           - '61- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '62- SSmth+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
-          - 'F4- a full merge file'
-          # --- Mining ---
+          - 'x'
+          - 'FM+COOK straight spot - TIME SENSITIVE'
           - '7- Mining files'
           - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
           - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
-
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'        
+          - 'x'
+          - 'x'
+          - 'x'         
+          - 'x'
+          - 'x'
+          - 'x'
       folder_3:
         description: 'Folder 3'
         required: false
@@ -81,32 +102,43 @@ on:
         options:
           - 'ALL FOLDERS'
           - '-- none --'
-          # --- Woodcutting ---
           - '1- Woodcutting files'
-          - '11- woodcuting oaks'
-          - '12- wooducting teaks'
-          # --- Crafting / Firemaking / Cooking / Fishing ---
+          - 'x'
           - '2- Crafting files'
+          - 'x'
           - '3- Firemaking files'
+          - 'x'
           - '4- Cooking files'
+          - 'x'
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
-          - 'FM+COOK straight spot - TIME SENSITIVE'
-          # --- Smithing ---
-          - '6- Smithing files'
+          - 'x'
           - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - 'Finish up noted smth alch leftover'
           - '58- Smth R2H only- Varr- zoomanvil left- W'
+          - 'F4- a full merge file'
+          - 'x'
+          - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
           - '61- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '62- SSmth+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
-          - 'F4- a full merge file'
-          # --- Mining ---
+          - 'x'
+          - 'FM+COOK straight spot - TIME SENSITIVE'
           - '7- Mining files'
           - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
           - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
-
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'        
+          - 'x'
+          - 'x'
+          - 'x'         
+          - 'x'
+          - 'x'
+          - 'x'
       versions:
         description: 'Total versions to generate *'
         required: true
@@ -158,7 +190,7 @@ jobs:
           F2="${{ github.event.inputs.folder_2 }}"
           F3="${{ github.event.inputs.folder_3 }}"
 
-          # ALL FOLDERS in any slot -> run everything, clear saved file
+          # ALL FOLDERS in any slot → run everything, clear saved file
           if [ "$F1" = "ALL FOLDERS" ] || [ "$F2" = "ALL FOLDERS" ] || [ "$F3" = "ALL FOLDERS" ]; then
             rm -f "$SAVED_FILE"
             echo "FOLDERS_FILE=" >> "$GITHUB_ENV"
@@ -167,46 +199,16 @@ jobs:
             echo "FOLDERS_UPDATED=false" >> "$GITHUB_ENV"
 
           else
+            # Collect specific non-blank selections
             SELECTED_FOLDERS=()
             for SLOT in "$F1" "$F2" "$F3"; do
               if [ "$SLOT" != "-- none --" ] && [ -n "$SLOT" ]; then
-                
-                # --- HIDDEN PATH MAPPING MAP ---
-                REAL_PATH="$SLOT"
-                case "$SLOT" in
-                  "11- woodcuting oaks")
-                    REAL_PATH="1- Woodcutting files/11- woodcuting oaks" ;;
-                  "12- wooducting teaks")
-                    REAL_PATH="1- Woodcutting files/12- wooducting teaks" ;;
-                  "20- Smth R2H+NotedAlch- Varr- zoomanvil left- W")
-                    REAL_PATH="6- Smithing files/20- Smth R2H+NotedAlch- Varr- zoomanvil left- W" ;;
-                  "Finish up noted smth alch leftover")
-                    REAL_PATH="6- Smithing files/Finish up noted smth alch leftover" ;;
-                  "58- Smth R2H only- Varr- zoomanvil left- W")
-                    REAL_PATH="6- Smithing files/58- Smth R2H only- Varr- zoomanvil left- W" ;;
-                  "60- Smth R2H only- Varr- zoomanvil left- W")
-                    REAL_PATH="6- Smithing files/60- Smth R2H only- Varr- zoomanvil left- W" ;;
-                  "61- Smth R2H+NotedAlch- Varr- zoomanvil left- W")
-                    REAL_PATH="6- Smithing files/61- Smth R2H+NotedAlch- Varr- zoomanvil left- W" ;;
-                  "62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W")
-                    REAL_PATH="6- Smithing files/62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W" ;;
-                  "62- SSmth+Smth R2H+NotedAlch- Varr- zoomanvil left- W")
-                    REAL_PATH="6- Smithing files/62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W" ;;
-                  "63- Smth R2H+NotedAlch- spotbox W")
-                    REAL_PATH="6- Smithing files/63- Smth R2H+NotedAlch- spotbox W" ;;
-                  "69- Pl8 smth by spacebar")
-                    REAL_PATH="6- Smithing files/69- Pl8 smth by spacebar" ;;
-                  "55- mMining- alkharid U1T- inz- N- TIME SENSITIVE")
-                    REAL_PATH="7- Mining files/55- mMining- alkharid U1T- inz- N- TIME SENSITIVE" ;;
-                  "61- Mining- Mining Guild- inz- N- TIME SENSITIVE")
-                    REAL_PATH="7- Mining files/61- Mining- Mining Guild- inz- N- TIME SENSITIVE" ;;
-                esac
-                
-                SELECTED_FOLDERS+=("$REAL_PATH")
+                SELECTED_FOLDERS+=("$SLOT")
               fi
             done
 
             if [ ${#SELECTED_FOLDERS[@]} -gt 0 ]; then
+              # One or more folders explicitly chosen — save and use them
               mkdir -p .github
               printf '%s\n' "${SELECTED_FOLDERS[@]}" > "$SAVED_FILE"
               echo "FOLDERS_FILE=$SAVED_FILE" >> "$GITHUB_ENV"
@@ -217,15 +219,19 @@ jobs:
               printf '  - %s\n' "${SELECTED_FOLDERS[@]}"
 
             elif [ -f "$SAVED_FILE" ]; then
+              # All dropdowns left as -- none -- → reuse the last saved selection
               echo "FOLDERS_FILE=$SAVED_FILE" >> "$GITHUB_ENV"
               echo "USE_SPECIFIC=true" >> "$GITHUB_ENV"
               echo "FOLDERS_SOURCE=repeating last saved selection from $SAVED_FILE" >> "$GITHUB_ENV"
-              echo "FOLDERS_UPDATED=false"
+              echo "FOLDERS_UPDATED=false" >> "$GITHUB_ENV"
+              echo "Repeating last selection:"
               cat "$SAVED_FILE"
+
             else
+              # Nothing chosen and no saved file → run everything
               echo "FOLDERS_FILE=" >> "$GITHUB_ENV"
               echo "USE_SPECIFIC=false" >> "$GITHUB_ENV"
-              echo "FOLDERS_SOURCE=no selection — processing ALL folders" >> "$GITHUB_ENV"
+              echo "FOLDERS_SOURCE=no selection and no saved file — processing ALL folders" >> "$GITHUB_ENV"
               echo "FOLDERS_UPDATED=false" >> "$GITHUB_ENV"
             fi
           fi
@@ -233,7 +239,7 @@ jobs:
       - name: Display settings
         run: |
           echo "========================================"
-          echo "STRING MACROS PIPELINE RUNNER"
+          echo "STRING MACROS v3.18.88"
           echo "========================================"
           echo "Bundle ID: ${{ env.BUNDLE_SEQ }}"
           echo "Versions: ${{ github.event.inputs.versions }}"
@@ -245,7 +251,7 @@ jobs:
           fi
           echo "Folder mode: ${{ env.FOLDERS_SOURCE }}"
           if [ -n "${{ env.FOLDERS_FILE }}" ]; then
-            echo "Mapped Paths to process:"
+            echo "Folders to process:"
             cat "${{ env.FOLDERS_FILE }}"
           fi
           echo "========================================"
@@ -270,9 +276,9 @@ jobs:
             ARGS+=("--specific-folders" "${{ env.FOLDERS_FILE }}")
           fi
 
-          echo "Running: python3 string_macros_v3_19_32.py ${ARGS[@]}"
+          echo "Running: python3 string_macros.py ${ARGS[@]}"
           echo ""
-          python3 string_macros_v3_19_32.py "${ARGS[@]}"
+          python3 string_macros.py "${ARGS[@]}"
 
       - name: Commit and Push Updates
         run: |
@@ -311,6 +317,9 @@ jobs:
           BUNDLE_NAME="stringed_bundle_${{ env.BUNDLE_SEQ }}"
           ZIP_FILE="stringed_macros_${{ env.BUNDLE_SEQ }}.7z"
 
+          echo "Creating ZIP from: output/$BUNDLE_NAME"
+          ls -R output/
+
           if [ -d "output/$BUNDLE_NAME" ]; then
             if [ "${{ env.USE_SPECIFIC }}" = "true" ]; then
               echo "Specific folders mode: Creating flat 7z structure..."
@@ -319,6 +328,9 @@ jobs:
                 echo "✗ Error: Directory output/$BUNDLE_NAME is empty!"
                 exit 1
               fi
+
+              echo "Contents to zip:"
+              ls -la "output/$BUNDLE_NAME"
 
               cd "output/$BUNDLE_NAME"
               7z a -mx=9 -mmt=2 "../../$ZIP_FILE" .
