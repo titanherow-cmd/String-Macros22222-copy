@@ -1,11 +1,4 @@
-The syntax error on line 41 happens because of the pipe symbol (`|`) used inside the `case` block for the `62- Smth...` folder names. Bash handles case alternatives using a single pipe `|`, but because it's wrapped inside a double-quoted line in a complex GitHub Actions shell string, the runner's YAML parser is getting confused thinking it's a structural pipeline command.
-
-To keep it 100% clean, error-free, and stable, it is much safer to break that multi-match option into two separate, clean lines.
-
-Here is the complete, corrected `.yml` file with line 41 fixed. Replace everything in your `.github/workflows/string.yml` with this:
-
-```yaml
-name: String macros (v3.19.33 - Flat 7z + Hidden Path Mapping)
+name: "String macros (v3.19.33 - Flat 7z + Hidden Path Mapping)"
 
 on:
   workflow_dispatch:
@@ -348,5 +341,3 @@ jobs:
           name: stringed_macros_bundle_${{ env.BUNDLE_SEQ }}
           path: ${{ env.FINAL_ZIP }}
           retention-days: 1
-
-```
