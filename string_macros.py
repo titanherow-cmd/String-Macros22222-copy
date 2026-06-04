@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.34
+  Current version: v3.19.35
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,7 +392,23 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
-- v3.19.34: Logout path detection checks all candidate paths and prints
+- v3.19.35: Removed Part E OOB click event clamp (added in v3.19.27).
+            ROOT CAUSE: The clamp incorrectly moved DragStart/RightDown
+            coords to the last safe Y>=80 position for ANY click with
+            Y<80, including legitimate game clicks near the top of the
+            OSRS window (e.g. Falch DragStart at Y=42 coming from Y=93).
+            This clamped click then received a Part A/F settling MM at
+            the wrong clamped position, causing the visible cursor-jump-
+            before-click symptom. Distraction file right clicks at
+            Y<80 were also incorrectly clamped, producing random clicks
+            at wrong tiles.
+            FIX: The idle-parking MM clamp (gap_after >= OOB_IDLE_GATE)
+            is sufficient for the defocus issue — it prevents the cursor
+            from being parked in browser chrome territory. Clicks in the
+            Y<80 zone are legitimate game actions and must not be moved.
+            Part E idle-parking protection fully intact.
+            Applied to both copies.
+- v3.19.34: Logout path detection checks all candidate paths.
             each one so the console shows exactly which resolved or why
             none matched. Three candidates checked for @ logout_sequence/:
             folder_data['path']/, folder_data['path'].parent/,
@@ -1104,7 +1120,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.34"
+VERSION = "v3.19.35"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -2489,17 +2505,6 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                 if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
                     events[_ei]['X'] = _last_safe_x
                     events[_ei]['Y'] = _last_safe_y
-
-            # Also clamp click events whose coords are OOB — these fire in
-            # browser chrome rather than the game window.
-            if (not _in_bounds
-                    and events[_ei].get('Type') in {'RightDown', 'RightUp',
-                                                     'DragStart', 'LeftDown'}
-                    and _last_safe_x is not None):
-                events[_ei]['X'] = _last_safe_x
-                events[_ei]['Y'] = _last_safe_y
-                print(f"  [Part E] Clamped OOB click {events[_ei]['Type']} "
-                      f"({_ex},{_ey})->({_last_safe_x},{_last_safe_y})")
         # --- end Part E ---
         # --- Part F: long-gap settling MM ---
         # When the last MM before a click is > 1000ms ago, it falls outside the
@@ -4956,7 +4961,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.34"
+VERSION = "v3.19.35"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -6950,17 +6955,6 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                 if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
                     events[_ei]['X'] = _last_safe_x
                     events[_ei]['Y'] = _last_safe_y
-
-            # Also clamp click events whose coords are OOB — these fire in
-            # browser chrome rather than the game window.
-            if (not _in_bounds
-                    and events[_ei].get('Type') in {'RightDown', 'RightUp',
-                                                     'DragStart', 'LeftDown'}
-                    and _last_safe_x is not None):
-                events[_ei]['X'] = _last_safe_x
-                events[_ei]['Y'] = _last_safe_y
-                print(f"  [Part E] Clamped OOB click {events[_ei]['Type']} "
-                      f"({_ex},{_ey})->({_last_safe_x},{_last_safe_y})")
         # --- end Part E ---
         # --- Part F: long-gap settling MM ---
         # When the last MM before a click is > 1000ms ago, it falls outside the
