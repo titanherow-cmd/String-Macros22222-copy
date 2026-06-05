@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.37
+  Current version: v3.19.38
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,18 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.38: Fixed group folder wrapper not applying in output.
+            ROOT CAUSE: output block checked `if args.specific_folders`
+            first, then `elif _group_name`. In specific-folders mode,
+            group children entering via _group_registry DID have _group_name
+            set, but the specific_folders branch fired first and ignored it,
+            writing flat (batch) subfolder_name/ instead of the wrapper.
+            FIX: reordered to check `_group_name` FIRST in both copies.
+            Group children now always wrap in (batch) skill_name/ regardless
+            of whether specific-folders or ALL FOLDERS mode is active.
+            Added debug print: "[group] _group_name=... → path" so the
+            console confirms wrapper activation every run.
+            Applied to both copies.
 - v3.19.37: Group folder outputs now wrapped in (batch) skill_name/
             subfolder inside bundle_dir. ALL FOLDERS mode on a skill
             group (e.g. 6- Smithing files) produces:
@@ -1132,7 +1144,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.37"
+VERSION = "v3.19.38"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -4699,16 +4711,18 @@ def main():
         # _run_suffix (" (2)", " (3)") is set when the same folder is selected
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
-        if args.specific_folders:
-            # Specific-folders mode: batch prefix on the subfolder name itself
+        _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
+        if _group_name:
+            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
+            _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
+            _skill_out.mkdir(parents=True, exist_ok=True)
+            out_folder = _skill_out / output_folder_name
+            print(f"  [group] _group_name={_group_name!r} → {out_folder.relative_to(bundle_dir)}")
+        elif args.specific_folders:
+            # Specific-folders mode, non-group: batch prefix on the subfolder name itself
             _run_suffix = folder_data.get('_run_suffix', '')
             output_folder_name = f"({args.bundle_id}) {output_folder_name}{_run_suffix}"
             out_folder = bundle_dir / output_folder_name
-        elif folder_data.get('_group_name'):
-            # ALL FOLDERS mode, group child: wrap inside (batch) skill_name/
-            _skill_out = bundle_dir / f"({args.bundle_id}) {folder_data['_group_name']}"
-            _skill_out.mkdir(parents=True, exist_ok=True)
-            out_folder = _skill_out / output_folder_name
         else:
             # ALL FOLDERS mode, standalone folder: flat, no batch prefix
             out_folder = bundle_dir / output_folder_name
@@ -4986,7 +5000,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.37"
+VERSION = "v3.19.38"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -9162,16 +9176,18 @@ def main():
         # _run_suffix (" (2)", " (3)") is set when the same folder is selected
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
-        if args.specific_folders:
-            # Specific-folders mode: batch prefix on the subfolder name itself
+        _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
+        if _group_name:
+            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
+            _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
+            _skill_out.mkdir(parents=True, exist_ok=True)
+            out_folder = _skill_out / output_folder_name
+            print(f"  [group] _group_name={_group_name!r} → {out_folder.relative_to(bundle_dir)}")
+        elif args.specific_folders:
+            # Specific-folders mode, non-group: batch prefix on the subfolder name itself
             _run_suffix = folder_data.get('_run_suffix', '')
             output_folder_name = f"({args.bundle_id}) {output_folder_name}{_run_suffix}"
             out_folder = bundle_dir / output_folder_name
-        elif folder_data.get('_group_name'):
-            # ALL FOLDERS mode, group child: wrap inside (batch) skill_name/
-            _skill_out = bundle_dir / f"({args.bundle_id}) {folder_data['_group_name']}"
-            _skill_out.mkdir(parents=True, exist_ok=True)
-            out_folder = _skill_out / output_folder_name
         else:
             # ALL FOLDERS mode, standalone folder: flat, no batch prefix
             out_folder = bundle_dir / output_folder_name
