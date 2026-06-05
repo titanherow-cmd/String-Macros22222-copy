@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.35
+  Current version: v3.19.37
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,18 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.37: Group folder outputs now wrapped in (batch) skill_name/
+            subfolder inside bundle_dir. ALL FOLDERS mode on a skill
+            group (e.g. 6- Smithing files) produces:
+              (470) 6- Smithing files/60- Only Smth R2H/
+            instead of flat (470) 60- Only Smth R2H/.
+            Specific-folders mode unchanged (batch prefix on subfolder).
+            @ logout_profiles and @ logout_sequence added to _SCAN_SKIP.
+            Group child iteration skips any folder starting with '@'.
+            scan_for_numbered_subfolders skips '@'-prefixed subfolders.
+            Prevents @ logout_profiles from generating spurious strung
+            files when placed inside a skill folder.
+            Applied to both copies.
 - v3.19.35: Removed Part E OOB click event clamp (added in v3.19.27).
             ROOT CAUSE: The clamp incorrectly moved DragStart/RightDown
             coords to the last safe Y>=80 position for ANY click with
@@ -1120,7 +1132,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.35"
+VERSION = "v3.19.37"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -3444,7 +3456,7 @@ def scan_for_numbered_subfolders(base_path):
         # Also accepts old name "dont mess with me" for backward compatibility
         folder_name_lower = item.name.lower()
         # Skip skill-specific logout folder — handled separately by build_logout_sequence
-        if folder_name_lower == 'logout, wait, in':
+        if folder_name_lower == 'logout, wait, in' or item.name.startswith('@'):
             continue
 
         if folder_name_lower == "don't use features on me" or folder_name_lower == "dont mess with me":
@@ -4260,7 +4272,8 @@ def main():
     # so the filter loop can expand a group name into all its children.
     main_folders   = []
     _group_registry = {}   # {group_name_lower: [child_fd, ...]}
-    _SCAN_SKIP = {'distractions', 'logout, wait, in', 'combination_history'}
+    _SCAN_SKIP = {'distractions', 'logout, wait, in', 'combination_history',
+                  '@ logout_profiles', '@ logout_sequence'}
 
     def _register_macro_folder(fd, indent=""):
         """Add fd to main_folders and print its summary line."""
@@ -4396,6 +4409,9 @@ def main():
             _children = []
             for _child in sorted(folder.iterdir()):
                 if not _child.is_dir(): continue
+                # Skip @ asset folders — logout profiles, sequences, etc.
+                if _child.name.startswith('@'):
+                    continue
                 _cfd = _scan_as_macro(_child, group_name=folder.name)
                 if _cfd:
                     _children.append(_cfd)
@@ -4684,10 +4700,19 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         if args.specific_folders:
+            # Specific-folders mode: batch prefix on the subfolder name itself
             _run_suffix = folder_data.get('_run_suffix', '')
             output_folder_name = f"({args.bundle_id}) {output_folder_name}{_run_suffix}"
-        print(f"\n Processing: {output_folder_name}")
-        out_folder = bundle_dir / output_folder_name
+            out_folder = bundle_dir / output_folder_name
+        elif folder_data.get('_group_name'):
+            # ALL FOLDERS mode, group child: wrap inside (batch) skill_name/
+            _skill_out = bundle_dir / f"({args.bundle_id}) {folder_data['_group_name']}"
+            _skill_out.mkdir(parents=True, exist_ok=True)
+            out_folder = _skill_out / output_folder_name
+        else:
+            # ALL FOLDERS mode, standalone folder: flat, no batch prefix
+            out_folder = bundle_dir / output_folder_name
+        print(f"\n Processing: {out_folder.relative_to(bundle_dir)}")
         out_folder.mkdir(parents=True, exist_ok=True)
         
         # --- Logout profile lookup + 3-file generation ---
@@ -4961,7 +4986,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.35"
+VERSION = "v3.19.37"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # ============================================================================
@@ -7894,7 +7919,7 @@ def scan_for_numbered_subfolders(base_path):
         # Also accepts old name "dont mess with me" for backward compatibility
         folder_name_lower = item.name.lower()
         # Skip skill-specific logout folder — handled separately by build_logout_sequence
-        if folder_name_lower == 'logout, wait, in':
+        if folder_name_lower == 'logout, wait, in' or item.name.startswith('@'):
             continue
 
         if folder_name_lower == "don't use features on me" or folder_name_lower == "dont mess with me":
@@ -8710,7 +8735,8 @@ def main():
     # so the filter loop can expand a group name into all its children.
     main_folders   = []
     _group_registry = {}   # {group_name_lower: [child_fd, ...]}
-    _SCAN_SKIP = {'distractions', 'logout, wait, in', 'combination_history'}
+    _SCAN_SKIP = {'distractions', 'logout, wait, in', 'combination_history',
+                  '@ logout_profiles', '@ logout_sequence'}
 
     def _register_macro_folder(fd, indent=""):
         """Add fd to main_folders and print its summary line."""
@@ -8846,6 +8872,9 @@ def main():
             _children = []
             for _child in sorted(folder.iterdir()):
                 if not _child.is_dir(): continue
+                # Skip @ asset folders — logout profiles, sequences, etc.
+                if _child.name.startswith('@'):
+                    continue
                 _cfd = _scan_as_macro(_child, group_name=folder.name)
                 if _cfd:
                     _children.append(_cfd)
@@ -9134,10 +9163,19 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         if args.specific_folders:
+            # Specific-folders mode: batch prefix on the subfolder name itself
             _run_suffix = folder_data.get('_run_suffix', '')
             output_folder_name = f"({args.bundle_id}) {output_folder_name}{_run_suffix}"
-        print(f"\n Processing: {output_folder_name}")
-        out_folder = bundle_dir / output_folder_name
+            out_folder = bundle_dir / output_folder_name
+        elif folder_data.get('_group_name'):
+            # ALL FOLDERS mode, group child: wrap inside (batch) skill_name/
+            _skill_out = bundle_dir / f"({args.bundle_id}) {folder_data['_group_name']}"
+            _skill_out.mkdir(parents=True, exist_ok=True)
+            out_folder = _skill_out / output_folder_name
+        else:
+            # ALL FOLDERS mode, standalone folder: flat, no batch prefix
+            out_folder = bundle_dir / output_folder_name
+        print(f"\n Processing: {out_folder.relative_to(bundle_dir)}")
         out_folder.mkdir(parents=True, exist_ok=True)
         
         # --- Logout profile lookup + 3-file generation ---
