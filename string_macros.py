@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.39
+  Current version: v3.19.40
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,15 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.40: Fixed cache not actually skipping Parts A-F on fast path.
+            ROOT CAUSE: Parts A-F (# INTRA-FILE ZERO-GAP FIX block) were
+            OUTSIDE the if/else block — ran on every call including cache
+            hits. Cache only saved disk I/O and filter_problematic_keys,
+            not the heavy A-F loops. deepcopy on large arrays also costly.
+            FIX: Indented entire Parts A-F + cache store block into the
+            else: branch (slow path only). Fast path now deepcopies cached
+            events and jumps directly to # Check if dmwm file, skipping
+            all filter + A-F processing. Applied to both copies.
 - v3.19.39: Two-level file cache added to add_file_to_cycle.
             Level 1 (_raw_file_cache): avoids re-reading source files
             from disk for the same path. Level 2 (_processed_events_cache):
@@ -1156,7 +1165,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.39"
+VERSION = "v3.19.40"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -2337,274 +2346,274 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
             if not events:
                 return
 
-        # INTRA-FILE ZERO-GAP FIX (Feature 25)
-        # Two separate checks, both shift the DragStart (and all events after it)
-        # forward to enforce a minimum gap:
-        #
-        # Part A — MouseMove -> click-type gap < 15ms ("simultaneous arrival + click")
-        #   Some recordings capture a MouseMove and DragStart/LeftDown at the same
-        #   millisecond (or within 1-14ms). The macro player reads these as
-        #   simultaneous - it can't distinguish "arrived THEN clicked" from "both at
-        #   once" - causing a left-button clamp at that position.
-        #   Threshold: 15ms  |  Target separation: 20ms
-        #
-        # Part B — DragEnd -> DragStart gap < 200ms ("too-fast re-press")
-        #   Source recordings may contain rapid re-presses in the 0–199ms range.
-        #   The macro player cannot distinguish a genuine release + re-click from
-        #   a single held drag in that window, causing left-button clamp.
-        #   v3.18.79: threshold 150ms. v3.18.92/93: raised to 200ms.
-        #   Threshold: 200ms  |  Target separation: 200ms
-        _CLICK_TYPES = {'DragStart', 'LeftDown', 'RightDown', 'Click'}
-
-        # Part A: MouseMove -> click-type gap < 30ms (v3.19.06 raised from 15ms).
-        # Fast source recordings often have the cursor still moving when
-        # DragStart fires — the last MM is at X0 (slightly short of target X1)
-        # and DragStart fires 15-29ms later, also at X0. Raising to 30ms means
-        # any click with < 30ms since the last cursor movement is shifted to
-        # 35ms after that MM, giving the macro player time to register the
-        # cursor at its settled position before the click fires.
-        _ZERO_GAP_THRESHOLD  = 35   # ms - gaps below this = cursor still moving
-                                     # Raised from 30: catches borderline 30-34ms
-                                     # cases (e.g. 33ms approach) where cursor may
-                                     # not have fully settled before click fires.
-        _ZERO_GAP_TARGET     = 35   # ms - minimum settle time to enforce
-        _SETTLE_BEFORE_CLICK = 15   # ms - settling MM lands this many ms before click
-        for _zi in range(1, len(events)):
-            if (events[_zi].get('Type') in _CLICK_TYPES
-                    and events[_zi - 1].get('Type') == 'MouseMove'):
-                _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
-                if 0 <= _gap < _ZERO_GAP_THRESHOLD:
-                    _shift = _ZERO_GAP_TARGET - _gap
-                    for _j in range(_zi, len(events)):
-                        events[_j]['Time'] = events[_j].get('Time', 0) + _shift
-                    # Insert a settling MouseMove at the click's own coords,
-                    # timed _SETTLE_BEFORE_CLICK ms before the (now-shifted) click.
-                    # This guarantees the cursor is at the correct tile when the
-                    # click fires, regardless of where the last recorded MM landed.
-                    _click_x = events[_zi].get('X')
-                    _click_y = events[_zi].get('Y')
-                    if _click_x is not None and _click_y is not None:
-                        _settle_mm = {
-                            'Type':    'MouseMove',
-                            'Time':    events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
-                            'X':       _click_x,
-                            'Y':       _click_y,
-                            'Delta':   None,
-                            'KeyCode': None,
-                        }
-                        events.insert(_zi, _settle_mm)
-                        # _zi now points to the settling MM; the click is at _zi+1.
-                        # Part B/C loops run AFTER this loop so their indices are
-                        # unaffected — they operate on the already-modified list.
-        # --- Rapid pre-scan: protect intentional double/rapid clicks from Part B ---
-        # Strict path:  DS[i-2] -> DE[i-1] -> DS[i]  (no MMs between, same tile <=5px)
-        # Soft path:    DS -> DE -> (any MMs) -> DS     (cursor drift allowed, <=20px)
-        # Both mark the second DS as protected so Part B never shifts it.
-        _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
-        _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
-        _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
-
-        rapid_protected       = set()   # strict rapid-click indices
-        soft_double_protected = set()   # soft double-click indices (MM drift between)
-
-        for _ri in range(1, len(events)):
-            if events[_ri].get('Type') != 'DragStart':
-                continue
-
-            # --- Strict path (existing logic, unchanged) ---
-            if (_ri >= 2
-                    and events[_ri - 1].get('Type') == 'DragEnd'
-                    and events[_ri - 2].get('Type') == 'DragStart'):
-                _rgap   = events[_ri]['Time'] - events[_ri - 1].get('Time', 0)
-                _rtotal = events[_ri]['Time'] - events[_ri - 2].get('Time', 0)
-                if 0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS:
-                    _rx1 = events[_ri - 2].get('X') or 0
-                    _ry1 = events[_ri - 2].get('Y') or 0
-                    _rx2 = events[_ri].get('X') or 0
-                    _ry2 = events[_ri].get('Y') or 0
-                    _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
-                    if _rdist <= _RAPID_POS_TOL:
-                        rapid_protected.add(_ri)
-                        continue  # already handled, skip soft check
-
-            # --- Soft path (new): DS -> DE -> (MMs only) -> DS ---
-            # Walk backwards from _ri-1 through MouseMoves to find the preceding DragEnd
-            _de_idx = None
-            for _back in range(_ri - 1, max(_ri - 15, -1), -1):
-                _bt = events[_back].get('Type')
-                if _bt == 'DragEnd':
-                    _de_idx = _back
-                    break
-                elif _bt != 'MouseMove':
-                    break   # hit a non-MM non-DE - not a clean drift pattern
-
-            if _de_idx is None:
-                continue
-
-            # Walk backwards from _de_idx-1 to find the DragStart that opened this DE
-            _ds_idx = None
-            for _back in range(_de_idx - 1, max(_de_idx - 5, -1), -1):
-                if events[_back].get('Type') == 'DragStart':
-                    _ds_idx = _back
-                    break
-                elif events[_back].get('Type') != 'MouseMove':
-                    break
-
-            if _ds_idx is None:
-                continue
-
-            _rtotal = events[_ri]['Time'] - events[_ds_idx].get('Time', 0)
-            if not (0 < _rtotal < _RAPID_WIN_MS):
-                continue
-
-            _rx1   = events[_ds_idx].get('X') or 0
-            _ry1   = events[_ds_idx].get('Y') or 0
-            _rx2   = events[_ri].get('X') or 0
-            _ry2   = events[_ri].get('Y') or 0
-            _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
-
-            if _rdist <= _RAPID_POS_TOL_SOFT:
-                soft_double_protected.add(_ri)
-        # --- end rapid pre-scan ---
-
-        # Part B: DragEnd -> DragStart too-fast re-press
-        # SKIP rapid-protected indices (intentional double/multi-clicks).
-        _DRAG_REPRESS_THRESHOLD = 200   # ms - re-press faster than this = clamp risk
-        _DRAG_REPRESS_TARGET    = 200   # ms - minimum release time to enforce
-        for _zi in range(1, len(events)):
-            if _zi in rapid_protected or _zi in soft_double_protected: continue
-            if (events[_zi].get('Type') == 'DragStart'
-                    and events[_zi - 1].get('Type') == 'DragEnd'):
-                _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
-                if 0 <= _gap < _DRAG_REPRESS_THRESHOLD:
-                    _shift = _DRAG_REPRESS_TARGET - _gap
-                    for _j in range(_zi, len(events)):
-                        events[_j]['Time'] = events[_j].get('Time', 0) + _shift
-
-        # Part C (v3.19.02): any button-event -> button-down gap < 200ms.
-        # Catches cross-type rapid re-press patterns missed by A and B:
-        #   LeftUp  -> LeftDown   (rapid double-click via LD/LU events)
-        #   RightUp -> RightDown  (rapid right-click)
-        #   DragEnd -> LeftDown   (cross-type re-press)
-        #   LeftUp  -> DragStart  (cross-type re-press)
-        #   ButtonDown -> ButtonDown (missing release = permanent hold risk)
-        # DragEnd->DragStart is skipped — handled by Part B above.
-        #   Threshold: 200ms  |  Target: 200ms
-        _BUTTON_DOWN_TYPES = {'DragStart', 'LeftDown', 'RightDown'}
-        _BUTTON_ANY_TYPES  = {'DragStart', 'DragEnd', 'LeftDown', 'LeftUp',
-                               'RightDown', 'RightUp', 'MouseDown', 'MouseUp'}
-        _PART_C_THRESHOLD  = 200
-        _PART_C_TARGET     = 200
-        for _zi in range(1, len(events)):
-            if _zi in rapid_protected: continue  # intentional rapid click
-            _cur = events[_zi].get('Type')
-            _prv = events[_zi - 1].get('Type')
-            if _prv == 'DragEnd' and _cur == 'DragStart':
-                continue  # Part B already handled this
-            if _cur in _BUTTON_DOWN_TYPES and _prv in _BUTTON_ANY_TYPES:
-                _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
-                if 0 <= _gap < _PART_C_THRESHOLD:
-                    _shift = _PART_C_TARGET - _gap
-                    for _j in range(_zi, len(events)):
-                        events[_j]['Time'] = events[_j].get('Time', 0) + _shift
-
-
-        # --- Part D: zero-gap DragEnd guard ---
-        # A DragEnd firing at the same timestamp as the preceding MouseMove
-        # causes the button-release to register mid-movement.
-        # Shift it forward so the release always lands after the cursor settles.
-        _DRAG_END_SETTLE_THRESHOLD = 25   # ms raised from 20 — catches 22ms recording
-        _DRAG_END_SETTLE_TARGET    = 25   # artifacts where cursor barely moves during hold
-
-        for _di in range(1, len(events)):
-            if events[_di].get('Type') != 'DragEnd':
-                continue
-            if events[_di - 1].get('Type') != 'MouseMove':
-                continue
-            _de_gap = events[_di].get('Time', 0) - events[_di - 1].get('Time', 0)
-            if 0 <= _de_gap < _DRAG_END_SETTLE_THRESHOLD:
-                _de_shift = _DRAG_END_SETTLE_TARGET - _de_gap
-                for _j in range(_di, len(events)):
-                    events[_j]['Time'] = events[_j].get('Time', 0) + _de_shift
-        # --- end Part D ---
-        # --- Part E: out-of-bounds MouseMove clamp ---
-        # Cursor positions outside game bounds are safe during real recording
-        # (no click = no focus change) but dangerous in simulated playback
-        # (OS/browser responds to cursor entering title bar / system UI area).
-        # If an out-of-bounds MM is followed by a long idle (cursor parked
-        # there), replace its coords with the last known safe position.
-        _OOB_SAFE_Y_MIN  = 80    # raised from 50: catches cursor parking at Y=57-79
-                                  # (browser chrome / top OS UI area). Only affects
-                                  # cursors PARKED in idle gaps >= _OOB_IDLE_GATE --
-                                  # active movement through Y<80 is never clamped.
-        _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
-        _OOB_SAFE_X_MIN  = 0
-        _OOB_SAFE_X_MAX  = 1920
-        _OOB_IDLE_GATE   = 1000  # ms — only clamp MMs about to be parked here
-
-        _last_safe_x, _last_safe_y = None, None
-        for _ei in range(len(events)):
-            _ex = events[_ei].get('X')
-            _ey = events[_ei].get('Y')
-            if _ex is None or _ey is None:
-                continue  # key event, skip
-            _in_bounds = (_OOB_SAFE_X_MIN <= _ex <= _OOB_SAFE_X_MAX and
-                          _OOB_SAFE_Y_MIN <= _ey <= _OOB_SAFE_Y_MAX)
-            if _in_bounds:
-                _last_safe_x, _last_safe_y = _ex, _ey
-            else:
-                # Out of bounds. Only clamp if the cursor is about to be
-                # parked here (large gap AFTER this event). Fast-moving paths
-                # that pass through unusual coords mid-sweep are left alone.
-                _gap_after = (events[_ei + 1]['Time'] - events[_ei]['Time']
-                              if _ei < len(events) - 1 else 0)
-                if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
-                    events[_ei]['X'] = _last_safe_x
-                    events[_ei]['Y'] = _last_safe_y
-        # --- end Part E ---
-        # --- Part F: long-gap settling MM ---
-        # When the last MM before a click is > 1000ms ago, it falls outside the
-        # jitter exclusion zone and may have been modified. Insert a settling MM
-        # at the click's exact coordinates 15ms before the click — this MM is
-        # within 1000ms of the click and therefore jitter-protected.
-        # No time shift needed (unlike Part A); cursor repositioning only.
-        _LONG_GAP_SETTLE_MS = 1000   # ms — beyond this, last MM may be jitterable
-
-        for _fi in range(1, len(events)):
-            if events[_fi].get('Type') not in _CLICK_TYPES:
-                continue
-            if events[_fi - 1].get('Type') != 'MouseMove':
-                continue
-            _fg = events[_fi].get('Time', 0) - events[_fi - 1].get('Time', 0)
-            if _fg <= _LONG_GAP_SETTLE_MS:
-                continue
-            _fx = events[_fi].get('X')
-            _fy = events[_fi].get('Y')
-            if _fx is None or _fy is None:
-                continue
-            _f_settle = {
-                'Type':    'MouseMove',
-                'Time':    events[_fi]['Time'] - _SETTLE_BEFORE_CLICK,
-                'X':       _fx,
-                'Y':       _fy,
-                'Delta':   None,
-                'KeyCode': None,
-            }
-            events.insert(_fi, _f_settle)
-            # _fi now points to settling MM; click is at _fi+1.
-            # Outer loop continues past both safely.
-        # --- end Part F ---
-
-
-
-        # Cache the fully-processed result for reuse across versions
-        # (Only store on slow path — skip if this file was already cached)
-        if _fp_str not in _processed_events_cache:
-            import copy as _copy
-            _processed_events_cache[_fp_str] = {
-                'events':    _copy.deepcopy(events),
-                'base_time': base_time_pre_filter,
-            }
+            # INTRA-FILE ZERO-GAP FIX (Feature 25)
+            # Two separate checks, both shift the DragStart (and all events after it)
+            # forward to enforce a minimum gap:
+            #
+            # Part A — MouseMove -> click-type gap < 15ms ("simultaneous arrival + click")
+            #   Some recordings capture a MouseMove and DragStart/LeftDown at the same
+            #   millisecond (or within 1-14ms). The macro player reads these as
+            #   simultaneous - it can't distinguish "arrived THEN clicked" from "both at
+            #   once" - causing a left-button clamp at that position.
+            #   Threshold: 15ms  |  Target separation: 20ms
+            #
+            # Part B — DragEnd -> DragStart gap < 200ms ("too-fast re-press")
+            #   Source recordings may contain rapid re-presses in the 0–199ms range.
+            #   The macro player cannot distinguish a genuine release + re-click from
+            #   a single held drag in that window, causing left-button clamp.
+            #   v3.18.79: threshold 150ms. v3.18.92/93: raised to 200ms.
+            #   Threshold: 200ms  |  Target separation: 200ms
+            _CLICK_TYPES = {'DragStart', 'LeftDown', 'RightDown', 'Click'}
+    
+            # Part A: MouseMove -> click-type gap < 30ms (v3.19.06 raised from 15ms).
+            # Fast source recordings often have the cursor still moving when
+            # DragStart fires — the last MM is at X0 (slightly short of target X1)
+            # and DragStart fires 15-29ms later, also at X0. Raising to 30ms means
+            # any click with < 30ms since the last cursor movement is shifted to
+            # 35ms after that MM, giving the macro player time to register the
+            # cursor at its settled position before the click fires.
+            _ZERO_GAP_THRESHOLD  = 35   # ms - gaps below this = cursor still moving
+                                         # Raised from 30: catches borderline 30-34ms
+                                         # cases (e.g. 33ms approach) where cursor may
+                                         # not have fully settled before click fires.
+            _ZERO_GAP_TARGET     = 35   # ms - minimum settle time to enforce
+            _SETTLE_BEFORE_CLICK = 15   # ms - settling MM lands this many ms before click
+            for _zi in range(1, len(events)):
+                if (events[_zi].get('Type') in _CLICK_TYPES
+                        and events[_zi - 1].get('Type') == 'MouseMove'):
+                    _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
+                    if 0 <= _gap < _ZERO_GAP_THRESHOLD:
+                        _shift = _ZERO_GAP_TARGET - _gap
+                        for _j in range(_zi, len(events)):
+                            events[_j]['Time'] = events[_j].get('Time', 0) + _shift
+                        # Insert a settling MouseMove at the click's own coords,
+                        # timed _SETTLE_BEFORE_CLICK ms before the (now-shifted) click.
+                        # This guarantees the cursor is at the correct tile when the
+                        # click fires, regardless of where the last recorded MM landed.
+                        _click_x = events[_zi].get('X')
+                        _click_y = events[_zi].get('Y')
+                        if _click_x is not None and _click_y is not None:
+                            _settle_mm = {
+                                'Type':    'MouseMove',
+                                'Time':    events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
+                                'X':       _click_x,
+                                'Y':       _click_y,
+                                'Delta':   None,
+                                'KeyCode': None,
+                            }
+                            events.insert(_zi, _settle_mm)
+                            # _zi now points to the settling MM; the click is at _zi+1.
+                            # Part B/C loops run AFTER this loop so their indices are
+                            # unaffected — they operate on the already-modified list.
+            # --- Rapid pre-scan: protect intentional double/rapid clicks from Part B ---
+            # Strict path:  DS[i-2] -> DE[i-1] -> DS[i]  (no MMs between, same tile <=5px)
+            # Soft path:    DS -> DE -> (any MMs) -> DS     (cursor drift allowed, <=20px)
+            # Both mark the second DS as protected so Part B never shifts it.
+            _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
+            _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
+            _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
+    
+            rapid_protected       = set()   # strict rapid-click indices
+            soft_double_protected = set()   # soft double-click indices (MM drift between)
+    
+            for _ri in range(1, len(events)):
+                if events[_ri].get('Type') != 'DragStart':
+                    continue
+    
+                # --- Strict path (existing logic, unchanged) ---
+                if (_ri >= 2
+                        and events[_ri - 1].get('Type') == 'DragEnd'
+                        and events[_ri - 2].get('Type') == 'DragStart'):
+                    _rgap   = events[_ri]['Time'] - events[_ri - 1].get('Time', 0)
+                    _rtotal = events[_ri]['Time'] - events[_ri - 2].get('Time', 0)
+                    if 0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS:
+                        _rx1 = events[_ri - 2].get('X') or 0
+                        _ry1 = events[_ri - 2].get('Y') or 0
+                        _rx2 = events[_ri].get('X') or 0
+                        _ry2 = events[_ri].get('Y') or 0
+                        _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
+                        if _rdist <= _RAPID_POS_TOL:
+                            rapid_protected.add(_ri)
+                            continue  # already handled, skip soft check
+    
+                # --- Soft path (new): DS -> DE -> (MMs only) -> DS ---
+                # Walk backwards from _ri-1 through MouseMoves to find the preceding DragEnd
+                _de_idx = None
+                for _back in range(_ri - 1, max(_ri - 15, -1), -1):
+                    _bt = events[_back].get('Type')
+                    if _bt == 'DragEnd':
+                        _de_idx = _back
+                        break
+                    elif _bt != 'MouseMove':
+                        break   # hit a non-MM non-DE - not a clean drift pattern
+    
+                if _de_idx is None:
+                    continue
+    
+                # Walk backwards from _de_idx-1 to find the DragStart that opened this DE
+                _ds_idx = None
+                for _back in range(_de_idx - 1, max(_de_idx - 5, -1), -1):
+                    if events[_back].get('Type') == 'DragStart':
+                        _ds_idx = _back
+                        break
+                    elif events[_back].get('Type') != 'MouseMove':
+                        break
+    
+                if _ds_idx is None:
+                    continue
+    
+                _rtotal = events[_ri]['Time'] - events[_ds_idx].get('Time', 0)
+                if not (0 < _rtotal < _RAPID_WIN_MS):
+                    continue
+    
+                _rx1   = events[_ds_idx].get('X') or 0
+                _ry1   = events[_ds_idx].get('Y') or 0
+                _rx2   = events[_ri].get('X') or 0
+                _ry2   = events[_ri].get('Y') or 0
+                _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
+    
+                if _rdist <= _RAPID_POS_TOL_SOFT:
+                    soft_double_protected.add(_ri)
+            # --- end rapid pre-scan ---
+    
+            # Part B: DragEnd -> DragStart too-fast re-press
+            # SKIP rapid-protected indices (intentional double/multi-clicks).
+            _DRAG_REPRESS_THRESHOLD = 200   # ms - re-press faster than this = clamp risk
+            _DRAG_REPRESS_TARGET    = 200   # ms - minimum release time to enforce
+            for _zi in range(1, len(events)):
+                if _zi in rapid_protected or _zi in soft_double_protected: continue
+                if (events[_zi].get('Type') == 'DragStart'
+                        and events[_zi - 1].get('Type') == 'DragEnd'):
+                    _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
+                    if 0 <= _gap < _DRAG_REPRESS_THRESHOLD:
+                        _shift = _DRAG_REPRESS_TARGET - _gap
+                        for _j in range(_zi, len(events)):
+                            events[_j]['Time'] = events[_j].get('Time', 0) + _shift
+    
+            # Part C (v3.19.02): any button-event -> button-down gap < 200ms.
+            # Catches cross-type rapid re-press patterns missed by A and B:
+            #   LeftUp  -> LeftDown   (rapid double-click via LD/LU events)
+            #   RightUp -> RightDown  (rapid right-click)
+            #   DragEnd -> LeftDown   (cross-type re-press)
+            #   LeftUp  -> DragStart  (cross-type re-press)
+            #   ButtonDown -> ButtonDown (missing release = permanent hold risk)
+            # DragEnd->DragStart is skipped — handled by Part B above.
+            #   Threshold: 200ms  |  Target: 200ms
+            _BUTTON_DOWN_TYPES = {'DragStart', 'LeftDown', 'RightDown'}
+            _BUTTON_ANY_TYPES  = {'DragStart', 'DragEnd', 'LeftDown', 'LeftUp',
+                                   'RightDown', 'RightUp', 'MouseDown', 'MouseUp'}
+            _PART_C_THRESHOLD  = 200
+            _PART_C_TARGET     = 200
+            for _zi in range(1, len(events)):
+                if _zi in rapid_protected: continue  # intentional rapid click
+                _cur = events[_zi].get('Type')
+                _prv = events[_zi - 1].get('Type')
+                if _prv == 'DragEnd' and _cur == 'DragStart':
+                    continue  # Part B already handled this
+                if _cur in _BUTTON_DOWN_TYPES and _prv in _BUTTON_ANY_TYPES:
+                    _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
+                    if 0 <= _gap < _PART_C_THRESHOLD:
+                        _shift = _PART_C_TARGET - _gap
+                        for _j in range(_zi, len(events)):
+                            events[_j]['Time'] = events[_j].get('Time', 0) + _shift
+    
+    
+            # --- Part D: zero-gap DragEnd guard ---
+            # A DragEnd firing at the same timestamp as the preceding MouseMove
+            # causes the button-release to register mid-movement.
+            # Shift it forward so the release always lands after the cursor settles.
+            _DRAG_END_SETTLE_THRESHOLD = 25   # ms raised from 20 — catches 22ms recording
+            _DRAG_END_SETTLE_TARGET    = 25   # artifacts where cursor barely moves during hold
+    
+            for _di in range(1, len(events)):
+                if events[_di].get('Type') != 'DragEnd':
+                    continue
+                if events[_di - 1].get('Type') != 'MouseMove':
+                    continue
+                _de_gap = events[_di].get('Time', 0) - events[_di - 1].get('Time', 0)
+                if 0 <= _de_gap < _DRAG_END_SETTLE_THRESHOLD:
+                    _de_shift = _DRAG_END_SETTLE_TARGET - _de_gap
+                    for _j in range(_di, len(events)):
+                        events[_j]['Time'] = events[_j].get('Time', 0) + _de_shift
+            # --- end Part D ---
+            # --- Part E: out-of-bounds MouseMove clamp ---
+            # Cursor positions outside game bounds are safe during real recording
+            # (no click = no focus change) but dangerous in simulated playback
+            # (OS/browser responds to cursor entering title bar / system UI area).
+            # If an out-of-bounds MM is followed by a long idle (cursor parked
+            # there), replace its coords with the last known safe position.
+            _OOB_SAFE_Y_MIN  = 80    # raised from 50: catches cursor parking at Y=57-79
+                                      # (browser chrome / top OS UI area). Only affects
+                                      # cursors PARKED in idle gaps >= _OOB_IDLE_GATE --
+                                      # active movement through Y<80 is never clamped.
+            _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
+            _OOB_SAFE_X_MIN  = 0
+            _OOB_SAFE_X_MAX  = 1920
+            _OOB_IDLE_GATE   = 1000  # ms — only clamp MMs about to be parked here
+    
+            _last_safe_x, _last_safe_y = None, None
+            for _ei in range(len(events)):
+                _ex = events[_ei].get('X')
+                _ey = events[_ei].get('Y')
+                if _ex is None or _ey is None:
+                    continue  # key event, skip
+                _in_bounds = (_OOB_SAFE_X_MIN <= _ex <= _OOB_SAFE_X_MAX and
+                              _OOB_SAFE_Y_MIN <= _ey <= _OOB_SAFE_Y_MAX)
+                if _in_bounds:
+                    _last_safe_x, _last_safe_y = _ex, _ey
+                else:
+                    # Out of bounds. Only clamp if the cursor is about to be
+                    # parked here (large gap AFTER this event). Fast-moving paths
+                    # that pass through unusual coords mid-sweep are left alone.
+                    _gap_after = (events[_ei + 1]['Time'] - events[_ei]['Time']
+                                  if _ei < len(events) - 1 else 0)
+                    if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
+                        events[_ei]['X'] = _last_safe_x
+                        events[_ei]['Y'] = _last_safe_y
+            # --- end Part E ---
+            # --- Part F: long-gap settling MM ---
+            # When the last MM before a click is > 1000ms ago, it falls outside the
+            # jitter exclusion zone and may have been modified. Insert a settling MM
+            # at the click's exact coordinates 15ms before the click — this MM is
+            # within 1000ms of the click and therefore jitter-protected.
+            # No time shift needed (unlike Part A); cursor repositioning only.
+            _LONG_GAP_SETTLE_MS = 1000   # ms — beyond this, last MM may be jitterable
+    
+            for _fi in range(1, len(events)):
+                if events[_fi].get('Type') not in _CLICK_TYPES:
+                    continue
+                if events[_fi - 1].get('Type') != 'MouseMove':
+                    continue
+                _fg = events[_fi].get('Time', 0) - events[_fi - 1].get('Time', 0)
+                if _fg <= _LONG_GAP_SETTLE_MS:
+                    continue
+                _fx = events[_fi].get('X')
+                _fy = events[_fi].get('Y')
+                if _fx is None or _fy is None:
+                    continue
+                _f_settle = {
+                    'Type':    'MouseMove',
+                    'Time':    events[_fi]['Time'] - _SETTLE_BEFORE_CLICK,
+                    'X':       _fx,
+                    'Y':       _fy,
+                    'Delta':   None,
+                    'KeyCode': None,
+                }
+                events.insert(_fi, _f_settle)
+                # _fi now points to settling MM; click is at _fi+1.
+                # Outer loop continues past both safely.
+            # --- end Part F ---
+    
+    
+    
+            # Cache the fully-processed result for reuse across versions
+            # (Only store on slow path — skip if this file was already cached)
+            if _fp_str not in _processed_events_cache:
+                import copy as _copy
+                _processed_events_cache[_fp_str] = {
+                    'events':    _copy.deepcopy(events),
+                    'base_time': base_time_pre_filter,
+                }
 
         # Check if dmwm file
         if is_dmwm:
@@ -5053,7 +5062,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.39"
+VERSION = "v3.19.40"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -6842,274 +6851,274 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
             if not events:
                 return
 
-        # INTRA-FILE ZERO-GAP FIX (Feature 25)
-        # Two separate checks, both shift the DragStart (and all events after it)
-        # forward to enforce a minimum gap:
-        #
-        # Part A — MouseMove -> click-type gap < 15ms ("simultaneous arrival + click")
-        #   Some recordings capture a MouseMove and DragStart/LeftDown at the same
-        #   millisecond (or within 1-14ms). The macro player reads these as
-        #   simultaneous - it can't distinguish "arrived THEN clicked" from "both at
-        #   once" - causing a left-button clamp at that position.
-        #   Threshold: 15ms  |  Target separation: 20ms
-        #
-        # Part B — DragEnd -> DragStart gap < 200ms ("too-fast re-press")
-        #   Source recordings may contain rapid re-presses in the 0–199ms range.
-        #   The macro player cannot distinguish a genuine release + re-click from
-        #   a single held drag in that window, causing left-button clamp.
-        #   v3.18.79: threshold 150ms. v3.18.92/93: raised to 200ms.
-        #   Threshold: 200ms  |  Target separation: 200ms
-        _CLICK_TYPES = {'DragStart', 'LeftDown', 'RightDown', 'Click'}
-
-        # Part A: MouseMove -> click-type gap < 30ms (v3.19.06 raised from 15ms).
-        # Fast source recordings often have the cursor still moving when
-        # DragStart fires — the last MM is at X0 (slightly short of target X1)
-        # and DragStart fires 15-29ms later, also at X0. Raising to 30ms means
-        # any click with < 30ms since the last cursor movement is shifted to
-        # 35ms after that MM, giving the macro player time to register the
-        # cursor at its settled position before the click fires.
-        _ZERO_GAP_THRESHOLD  = 35   # ms - gaps below this = cursor still moving
-                                     # Raised from 30: catches borderline 30-34ms
-                                     # cases (e.g. 33ms approach) where cursor may
-                                     # not have fully settled before click fires.
-        _ZERO_GAP_TARGET     = 35   # ms - minimum settle time to enforce
-        _SETTLE_BEFORE_CLICK = 15   # ms - settling MM lands this many ms before click
-        for _zi in range(1, len(events)):
-            if (events[_zi].get('Type') in _CLICK_TYPES
-                    and events[_zi - 1].get('Type') == 'MouseMove'):
-                _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
-                if 0 <= _gap < _ZERO_GAP_THRESHOLD:
-                    _shift = _ZERO_GAP_TARGET - _gap
-                    for _j in range(_zi, len(events)):
-                        events[_j]['Time'] = events[_j].get('Time', 0) + _shift
-                    # Insert a settling MouseMove at the click's own coords,
-                    # timed _SETTLE_BEFORE_CLICK ms before the (now-shifted) click.
-                    # This guarantees the cursor is at the correct tile when the
-                    # click fires, regardless of where the last recorded MM landed.
-                    _click_x = events[_zi].get('X')
-                    _click_y = events[_zi].get('Y')
-                    if _click_x is not None and _click_y is not None:
-                        _settle_mm = {
-                            'Type':    'MouseMove',
-                            'Time':    events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
-                            'X':       _click_x,
-                            'Y':       _click_y,
-                            'Delta':   None,
-                            'KeyCode': None,
-                        }
-                        events.insert(_zi, _settle_mm)
-                        # _zi now points to the settling MM; the click is at _zi+1.
-                        # Part B/C loops run AFTER this loop so their indices are
-                        # unaffected — they operate on the already-modified list.
-        # --- Rapid pre-scan: protect intentional double/rapid clicks from Part B ---
-        # Strict path:  DS[i-2] -> DE[i-1] -> DS[i]  (no MMs between, same tile <=5px)
-        # Soft path:    DS -> DE -> (any MMs) -> DS     (cursor drift allowed, <=20px)
-        # Both mark the second DS as protected so Part B never shifts it.
-        _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
-        _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
-        _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
-
-        rapid_protected       = set()   # strict rapid-click indices
-        soft_double_protected = set()   # soft double-click indices (MM drift between)
-
-        for _ri in range(1, len(events)):
-            if events[_ri].get('Type') != 'DragStart':
-                continue
-
-            # --- Strict path (existing logic, unchanged) ---
-            if (_ri >= 2
-                    and events[_ri - 1].get('Type') == 'DragEnd'
-                    and events[_ri - 2].get('Type') == 'DragStart'):
-                _rgap   = events[_ri]['Time'] - events[_ri - 1].get('Time', 0)
-                _rtotal = events[_ri]['Time'] - events[_ri - 2].get('Time', 0)
-                if 0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS:
-                    _rx1 = events[_ri - 2].get('X') or 0
-                    _ry1 = events[_ri - 2].get('Y') or 0
-                    _rx2 = events[_ri].get('X') or 0
-                    _ry2 = events[_ri].get('Y') or 0
-                    _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
-                    if _rdist <= _RAPID_POS_TOL:
-                        rapid_protected.add(_ri)
-                        continue  # already handled, skip soft check
-
-            # --- Soft path (new): DS -> DE -> (MMs only) -> DS ---
-            # Walk backwards from _ri-1 through MouseMoves to find the preceding DragEnd
-            _de_idx = None
-            for _back in range(_ri - 1, max(_ri - 15, -1), -1):
-                _bt = events[_back].get('Type')
-                if _bt == 'DragEnd':
-                    _de_idx = _back
-                    break
-                elif _bt != 'MouseMove':
-                    break   # hit a non-MM non-DE - not a clean drift pattern
-
-            if _de_idx is None:
-                continue
-
-            # Walk backwards from _de_idx-1 to find the DragStart that opened this DE
-            _ds_idx = None
-            for _back in range(_de_idx - 1, max(_de_idx - 5, -1), -1):
-                if events[_back].get('Type') == 'DragStart':
-                    _ds_idx = _back
-                    break
-                elif events[_back].get('Type') != 'MouseMove':
-                    break
-
-            if _ds_idx is None:
-                continue
-
-            _rtotal = events[_ri]['Time'] - events[_ds_idx].get('Time', 0)
-            if not (0 < _rtotal < _RAPID_WIN_MS):
-                continue
-
-            _rx1   = events[_ds_idx].get('X') or 0
-            _ry1   = events[_ds_idx].get('Y') or 0
-            _rx2   = events[_ri].get('X') or 0
-            _ry2   = events[_ri].get('Y') or 0
-            _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
-
-            if _rdist <= _RAPID_POS_TOL_SOFT:
-                soft_double_protected.add(_ri)
-        # --- end rapid pre-scan ---
-
-        # Part B: DragEnd -> DragStart too-fast re-press
-        # SKIP rapid-protected indices (intentional double/multi-clicks).
-        _DRAG_REPRESS_THRESHOLD = 200   # ms - re-press faster than this = clamp risk
-        _DRAG_REPRESS_TARGET    = 200   # ms - minimum release time to enforce
-        for _zi in range(1, len(events)):
-            if _zi in rapid_protected or _zi in soft_double_protected: continue
-            if (events[_zi].get('Type') == 'DragStart'
-                    and events[_zi - 1].get('Type') == 'DragEnd'):
-                _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
-                if 0 <= _gap < _DRAG_REPRESS_THRESHOLD:
-                    _shift = _DRAG_REPRESS_TARGET - _gap
-                    for _j in range(_zi, len(events)):
-                        events[_j]['Time'] = events[_j].get('Time', 0) + _shift
-
-        # Part C (v3.19.02): any button-event -> button-down gap < 200ms.
-        # Catches cross-type rapid re-press patterns missed by A and B:
-        #   LeftUp  -> LeftDown   (rapid double-click via LD/LU events)
-        #   RightUp -> RightDown  (rapid right-click)
-        #   DragEnd -> LeftDown   (cross-type re-press)
-        #   LeftUp  -> DragStart  (cross-type re-press)
-        #   ButtonDown -> ButtonDown (missing release = permanent hold risk)
-        # DragEnd->DragStart is skipped — handled by Part B above.
-        #   Threshold: 200ms  |  Target: 200ms
-        _BUTTON_DOWN_TYPES = {'DragStart', 'LeftDown', 'RightDown'}
-        _BUTTON_ANY_TYPES  = {'DragStart', 'DragEnd', 'LeftDown', 'LeftUp',
-                               'RightDown', 'RightUp', 'MouseDown', 'MouseUp'}
-        _PART_C_THRESHOLD  = 200
-        _PART_C_TARGET     = 200
-        for _zi in range(1, len(events)):
-            if _zi in rapid_protected: continue  # intentional rapid click
-            _cur = events[_zi].get('Type')
-            _prv = events[_zi - 1].get('Type')
-            if _prv == 'DragEnd' and _cur == 'DragStart':
-                continue  # Part B already handled this
-            if _cur in _BUTTON_DOWN_TYPES and _prv in _BUTTON_ANY_TYPES:
-                _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
-                if 0 <= _gap < _PART_C_THRESHOLD:
-                    _shift = _PART_C_TARGET - _gap
-                    for _j in range(_zi, len(events)):
-                        events[_j]['Time'] = events[_j].get('Time', 0) + _shift
-
-
-        # --- Part D: zero-gap DragEnd guard ---
-        # A DragEnd firing at the same timestamp as the preceding MouseMove
-        # causes the button-release to register mid-movement.
-        # Shift it forward so the release always lands after the cursor settles.
-        _DRAG_END_SETTLE_THRESHOLD = 25   # ms raised from 20 — catches 22ms recording
-        _DRAG_END_SETTLE_TARGET    = 25   # artifacts where cursor barely moves during hold
-
-        for _di in range(1, len(events)):
-            if events[_di].get('Type') != 'DragEnd':
-                continue
-            if events[_di - 1].get('Type') != 'MouseMove':
-                continue
-            _de_gap = events[_di].get('Time', 0) - events[_di - 1].get('Time', 0)
-            if 0 <= _de_gap < _DRAG_END_SETTLE_THRESHOLD:
-                _de_shift = _DRAG_END_SETTLE_TARGET - _de_gap
-                for _j in range(_di, len(events)):
-                    events[_j]['Time'] = events[_j].get('Time', 0) + _de_shift
-        # --- end Part D ---
-        # --- Part E: out-of-bounds MouseMove clamp ---
-        # Cursor positions outside game bounds are safe during real recording
-        # (no click = no focus change) but dangerous in simulated playback
-        # (OS/browser responds to cursor entering title bar / system UI area).
-        # If an out-of-bounds MM is followed by a long idle (cursor parked
-        # there), replace its coords with the last known safe position.
-        _OOB_SAFE_Y_MIN  = 80    # raised from 50: catches cursor parking at Y=57-79
-                                  # (browser chrome / top OS UI area). Only affects
-                                  # cursors PARKED in idle gaps >= _OOB_IDLE_GATE --
-                                  # active movement through Y<80 is never clamped.
-        _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
-        _OOB_SAFE_X_MIN  = 0
-        _OOB_SAFE_X_MAX  = 1920
-        _OOB_IDLE_GATE   = 1000  # ms — only clamp MMs about to be parked here
-
-        _last_safe_x, _last_safe_y = None, None
-        for _ei in range(len(events)):
-            _ex = events[_ei].get('X')
-            _ey = events[_ei].get('Y')
-            if _ex is None or _ey is None:
-                continue  # key event, skip
-            _in_bounds = (_OOB_SAFE_X_MIN <= _ex <= _OOB_SAFE_X_MAX and
-                          _OOB_SAFE_Y_MIN <= _ey <= _OOB_SAFE_Y_MAX)
-            if _in_bounds:
-                _last_safe_x, _last_safe_y = _ex, _ey
-            else:
-                # Out of bounds. Only clamp if the cursor is about to be
-                # parked here (large gap AFTER this event). Fast-moving paths
-                # that pass through unusual coords mid-sweep are left alone.
-                _gap_after = (events[_ei + 1]['Time'] - events[_ei]['Time']
-                              if _ei < len(events) - 1 else 0)
-                if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
-                    events[_ei]['X'] = _last_safe_x
-                    events[_ei]['Y'] = _last_safe_y
-        # --- end Part E ---
-        # --- Part F: long-gap settling MM ---
-        # When the last MM before a click is > 1000ms ago, it falls outside the
-        # jitter exclusion zone and may have been modified. Insert a settling MM
-        # at the click's exact coordinates 15ms before the click — this MM is
-        # within 1000ms of the click and therefore jitter-protected.
-        # No time shift needed (unlike Part A); cursor repositioning only.
-        _LONG_GAP_SETTLE_MS = 1000   # ms — beyond this, last MM may be jitterable
-
-        for _fi in range(1, len(events)):
-            if events[_fi].get('Type') not in _CLICK_TYPES:
-                continue
-            if events[_fi - 1].get('Type') != 'MouseMove':
-                continue
-            _fg = events[_fi].get('Time', 0) - events[_fi - 1].get('Time', 0)
-            if _fg <= _LONG_GAP_SETTLE_MS:
-                continue
-            _fx = events[_fi].get('X')
-            _fy = events[_fi].get('Y')
-            if _fx is None or _fy is None:
-                continue
-            _f_settle = {
-                'Type':    'MouseMove',
-                'Time':    events[_fi]['Time'] - _SETTLE_BEFORE_CLICK,
-                'X':       _fx,
-                'Y':       _fy,
-                'Delta':   None,
-                'KeyCode': None,
-            }
-            events.insert(_fi, _f_settle)
-            # _fi now points to settling MM; click is at _fi+1.
-            # Outer loop continues past both safely.
-        # --- end Part F ---
-
-
-
-        # Cache the fully-processed result for reuse across versions
-        # (Only store on slow path — skip if this file was already cached)
-        if _fp_str not in _processed_events_cache:
-            import copy as _copy
-            _processed_events_cache[_fp_str] = {
-                'events':    _copy.deepcopy(events),
-                'base_time': base_time_pre_filter,
-            }
+            # INTRA-FILE ZERO-GAP FIX (Feature 25)
+            # Two separate checks, both shift the DragStart (and all events after it)
+            # forward to enforce a minimum gap:
+            #
+            # Part A — MouseMove -> click-type gap < 15ms ("simultaneous arrival + click")
+            #   Some recordings capture a MouseMove and DragStart/LeftDown at the same
+            #   millisecond (or within 1-14ms). The macro player reads these as
+            #   simultaneous - it can't distinguish "arrived THEN clicked" from "both at
+            #   once" - causing a left-button clamp at that position.
+            #   Threshold: 15ms  |  Target separation: 20ms
+            #
+            # Part B — DragEnd -> DragStart gap < 200ms ("too-fast re-press")
+            #   Source recordings may contain rapid re-presses in the 0–199ms range.
+            #   The macro player cannot distinguish a genuine release + re-click from
+            #   a single held drag in that window, causing left-button clamp.
+            #   v3.18.79: threshold 150ms. v3.18.92/93: raised to 200ms.
+            #   Threshold: 200ms  |  Target separation: 200ms
+            _CLICK_TYPES = {'DragStart', 'LeftDown', 'RightDown', 'Click'}
+    
+            # Part A: MouseMove -> click-type gap < 30ms (v3.19.06 raised from 15ms).
+            # Fast source recordings often have the cursor still moving when
+            # DragStart fires — the last MM is at X0 (slightly short of target X1)
+            # and DragStart fires 15-29ms later, also at X0. Raising to 30ms means
+            # any click with < 30ms since the last cursor movement is shifted to
+            # 35ms after that MM, giving the macro player time to register the
+            # cursor at its settled position before the click fires.
+            _ZERO_GAP_THRESHOLD  = 35   # ms - gaps below this = cursor still moving
+                                         # Raised from 30: catches borderline 30-34ms
+                                         # cases (e.g. 33ms approach) where cursor may
+                                         # not have fully settled before click fires.
+            _ZERO_GAP_TARGET     = 35   # ms - minimum settle time to enforce
+            _SETTLE_BEFORE_CLICK = 15   # ms - settling MM lands this many ms before click
+            for _zi in range(1, len(events)):
+                if (events[_zi].get('Type') in _CLICK_TYPES
+                        and events[_zi - 1].get('Type') == 'MouseMove'):
+                    _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
+                    if 0 <= _gap < _ZERO_GAP_THRESHOLD:
+                        _shift = _ZERO_GAP_TARGET - _gap
+                        for _j in range(_zi, len(events)):
+                            events[_j]['Time'] = events[_j].get('Time', 0) + _shift
+                        # Insert a settling MouseMove at the click's own coords,
+                        # timed _SETTLE_BEFORE_CLICK ms before the (now-shifted) click.
+                        # This guarantees the cursor is at the correct tile when the
+                        # click fires, regardless of where the last recorded MM landed.
+                        _click_x = events[_zi].get('X')
+                        _click_y = events[_zi].get('Y')
+                        if _click_x is not None and _click_y is not None:
+                            _settle_mm = {
+                                'Type':    'MouseMove',
+                                'Time':    events[_zi]['Time'] - _SETTLE_BEFORE_CLICK,
+                                'X':       _click_x,
+                                'Y':       _click_y,
+                                'Delta':   None,
+                                'KeyCode': None,
+                            }
+                            events.insert(_zi, _settle_mm)
+                            # _zi now points to the settling MM; the click is at _zi+1.
+                            # Part B/C loops run AFTER this loop so their indices are
+                            # unaffected — they operate on the already-modified list.
+            # --- Rapid pre-scan: protect intentional double/rapid clicks from Part B ---
+            # Strict path:  DS[i-2] -> DE[i-1] -> DS[i]  (no MMs between, same tile <=5px)
+            # Soft path:    DS -> DE -> (any MMs) -> DS     (cursor drift allowed, <=20px)
+            # Both mark the second DS as protected so Part B never shifts it.
+            _RAPID_POS_TOL      =  5   # px - strict: same tile, no drift
+            _RAPID_POS_TOL_SOFT = 20   # px - soft: slight cursor movement between clicks
+            _RAPID_WIN_MS       = 500  # ms - max total span DS1->DS2 for both paths
+    
+            rapid_protected       = set()   # strict rapid-click indices
+            soft_double_protected = set()   # soft double-click indices (MM drift between)
+    
+            for _ri in range(1, len(events)):
+                if events[_ri].get('Type') != 'DragStart':
+                    continue
+    
+                # --- Strict path (existing logic, unchanged) ---
+                if (_ri >= 2
+                        and events[_ri - 1].get('Type') == 'DragEnd'
+                        and events[_ri - 2].get('Type') == 'DragStart'):
+                    _rgap   = events[_ri]['Time'] - events[_ri - 1].get('Time', 0)
+                    _rtotal = events[_ri]['Time'] - events[_ri - 2].get('Time', 0)
+                    if 0 <= _rgap < _RAPID_WIN_MS and 0 < _rtotal < _RAPID_WIN_MS:
+                        _rx1 = events[_ri - 2].get('X') or 0
+                        _ry1 = events[_ri - 2].get('Y') or 0
+                        _rx2 = events[_ri].get('X') or 0
+                        _ry2 = events[_ri].get('Y') or 0
+                        _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
+                        if _rdist <= _RAPID_POS_TOL:
+                            rapid_protected.add(_ri)
+                            continue  # already handled, skip soft check
+    
+                # --- Soft path (new): DS -> DE -> (MMs only) -> DS ---
+                # Walk backwards from _ri-1 through MouseMoves to find the preceding DragEnd
+                _de_idx = None
+                for _back in range(_ri - 1, max(_ri - 15, -1), -1):
+                    _bt = events[_back].get('Type')
+                    if _bt == 'DragEnd':
+                        _de_idx = _back
+                        break
+                    elif _bt != 'MouseMove':
+                        break   # hit a non-MM non-DE - not a clean drift pattern
+    
+                if _de_idx is None:
+                    continue
+    
+                # Walk backwards from _de_idx-1 to find the DragStart that opened this DE
+                _ds_idx = None
+                for _back in range(_de_idx - 1, max(_de_idx - 5, -1), -1):
+                    if events[_back].get('Type') == 'DragStart':
+                        _ds_idx = _back
+                        break
+                    elif events[_back].get('Type') != 'MouseMove':
+                        break
+    
+                if _ds_idx is None:
+                    continue
+    
+                _rtotal = events[_ri]['Time'] - events[_ds_idx].get('Time', 0)
+                if not (0 < _rtotal < _RAPID_WIN_MS):
+                    continue
+    
+                _rx1   = events[_ds_idx].get('X') or 0
+                _ry1   = events[_ds_idx].get('Y') or 0
+                _rx2   = events[_ri].get('X') or 0
+                _ry2   = events[_ri].get('Y') or 0
+                _rdist = ((_rx2 - _rx1) ** 2 + (_ry2 - _ry1) ** 2) ** 0.5
+    
+                if _rdist <= _RAPID_POS_TOL_SOFT:
+                    soft_double_protected.add(_ri)
+            # --- end rapid pre-scan ---
+    
+            # Part B: DragEnd -> DragStart too-fast re-press
+            # SKIP rapid-protected indices (intentional double/multi-clicks).
+            _DRAG_REPRESS_THRESHOLD = 200   # ms - re-press faster than this = clamp risk
+            _DRAG_REPRESS_TARGET    = 200   # ms - minimum release time to enforce
+            for _zi in range(1, len(events)):
+                if _zi in rapid_protected or _zi in soft_double_protected: continue
+                if (events[_zi].get('Type') == 'DragStart'
+                        and events[_zi - 1].get('Type') == 'DragEnd'):
+                    _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
+                    if 0 <= _gap < _DRAG_REPRESS_THRESHOLD:
+                        _shift = _DRAG_REPRESS_TARGET - _gap
+                        for _j in range(_zi, len(events)):
+                            events[_j]['Time'] = events[_j].get('Time', 0) + _shift
+    
+            # Part C (v3.19.02): any button-event -> button-down gap < 200ms.
+            # Catches cross-type rapid re-press patterns missed by A and B:
+            #   LeftUp  -> LeftDown   (rapid double-click via LD/LU events)
+            #   RightUp -> RightDown  (rapid right-click)
+            #   DragEnd -> LeftDown   (cross-type re-press)
+            #   LeftUp  -> DragStart  (cross-type re-press)
+            #   ButtonDown -> ButtonDown (missing release = permanent hold risk)
+            # DragEnd->DragStart is skipped — handled by Part B above.
+            #   Threshold: 200ms  |  Target: 200ms
+            _BUTTON_DOWN_TYPES = {'DragStart', 'LeftDown', 'RightDown'}
+            _BUTTON_ANY_TYPES  = {'DragStart', 'DragEnd', 'LeftDown', 'LeftUp',
+                                   'RightDown', 'RightUp', 'MouseDown', 'MouseUp'}
+            _PART_C_THRESHOLD  = 200
+            _PART_C_TARGET     = 200
+            for _zi in range(1, len(events)):
+                if _zi in rapid_protected: continue  # intentional rapid click
+                _cur = events[_zi].get('Type')
+                _prv = events[_zi - 1].get('Type')
+                if _prv == 'DragEnd' and _cur == 'DragStart':
+                    continue  # Part B already handled this
+                if _cur in _BUTTON_DOWN_TYPES and _prv in _BUTTON_ANY_TYPES:
+                    _gap = events[_zi].get('Time', 0) - events[_zi - 1].get('Time', 0)
+                    if 0 <= _gap < _PART_C_THRESHOLD:
+                        _shift = _PART_C_TARGET - _gap
+                        for _j in range(_zi, len(events)):
+                            events[_j]['Time'] = events[_j].get('Time', 0) + _shift
+    
+    
+            # --- Part D: zero-gap DragEnd guard ---
+            # A DragEnd firing at the same timestamp as the preceding MouseMove
+            # causes the button-release to register mid-movement.
+            # Shift it forward so the release always lands after the cursor settles.
+            _DRAG_END_SETTLE_THRESHOLD = 25   # ms raised from 20 — catches 22ms recording
+            _DRAG_END_SETTLE_TARGET    = 25   # artifacts where cursor barely moves during hold
+    
+            for _di in range(1, len(events)):
+                if events[_di].get('Type') != 'DragEnd':
+                    continue
+                if events[_di - 1].get('Type') != 'MouseMove':
+                    continue
+                _de_gap = events[_di].get('Time', 0) - events[_di - 1].get('Time', 0)
+                if 0 <= _de_gap < _DRAG_END_SETTLE_THRESHOLD:
+                    _de_shift = _DRAG_END_SETTLE_TARGET - _de_gap
+                    for _j in range(_di, len(events)):
+                        events[_j]['Time'] = events[_j].get('Time', 0) + _de_shift
+            # --- end Part D ---
+            # --- Part E: out-of-bounds MouseMove clamp ---
+            # Cursor positions outside game bounds are safe during real recording
+            # (no click = no focus change) but dangerous in simulated playback
+            # (OS/browser responds to cursor entering title bar / system UI area).
+            # If an out-of-bounds MM is followed by a long idle (cursor parked
+            # there), replace its coords with the last known safe position.
+            _OOB_SAFE_Y_MIN  = 80    # raised from 50: catches cursor parking at Y=57-79
+                                      # (browser chrome / top OS UI area). Only affects
+                                      # cursors PARKED in idle gaps >= _OOB_IDLE_GATE --
+                                      # active movement through Y<80 is never clamped.
+            _OOB_SAFE_Y_MAX  = 900   # anything below this is probably off-screen
+            _OOB_SAFE_X_MIN  = 0
+            _OOB_SAFE_X_MAX  = 1920
+            _OOB_IDLE_GATE   = 1000  # ms — only clamp MMs about to be parked here
+    
+            _last_safe_x, _last_safe_y = None, None
+            for _ei in range(len(events)):
+                _ex = events[_ei].get('X')
+                _ey = events[_ei].get('Y')
+                if _ex is None or _ey is None:
+                    continue  # key event, skip
+                _in_bounds = (_OOB_SAFE_X_MIN <= _ex <= _OOB_SAFE_X_MAX and
+                              _OOB_SAFE_Y_MIN <= _ey <= _OOB_SAFE_Y_MAX)
+                if _in_bounds:
+                    _last_safe_x, _last_safe_y = _ex, _ey
+                else:
+                    # Out of bounds. Only clamp if the cursor is about to be
+                    # parked here (large gap AFTER this event). Fast-moving paths
+                    # that pass through unusual coords mid-sweep are left alone.
+                    _gap_after = (events[_ei + 1]['Time'] - events[_ei]['Time']
+                                  if _ei < len(events) - 1 else 0)
+                    if _gap_after >= _OOB_IDLE_GATE and _last_safe_x is not None:
+                        events[_ei]['X'] = _last_safe_x
+                        events[_ei]['Y'] = _last_safe_y
+            # --- end Part E ---
+            # --- Part F: long-gap settling MM ---
+            # When the last MM before a click is > 1000ms ago, it falls outside the
+            # jitter exclusion zone and may have been modified. Insert a settling MM
+            # at the click's exact coordinates 15ms before the click — this MM is
+            # within 1000ms of the click and therefore jitter-protected.
+            # No time shift needed (unlike Part A); cursor repositioning only.
+            _LONG_GAP_SETTLE_MS = 1000   # ms — beyond this, last MM may be jitterable
+    
+            for _fi in range(1, len(events)):
+                if events[_fi].get('Type') not in _CLICK_TYPES:
+                    continue
+                if events[_fi - 1].get('Type') != 'MouseMove':
+                    continue
+                _fg = events[_fi].get('Time', 0) - events[_fi - 1].get('Time', 0)
+                if _fg <= _LONG_GAP_SETTLE_MS:
+                    continue
+                _fx = events[_fi].get('X')
+                _fy = events[_fi].get('Y')
+                if _fx is None or _fy is None:
+                    continue
+                _f_settle = {
+                    'Type':    'MouseMove',
+                    'Time':    events[_fi]['Time'] - _SETTLE_BEFORE_CLICK,
+                    'X':       _fx,
+                    'Y':       _fy,
+                    'Delta':   None,
+                    'KeyCode': None,
+                }
+                events.insert(_fi, _f_settle)
+                # _fi now points to settling MM; click is at _fi+1.
+                # Outer loop continues past both safely.
+            # --- end Part F ---
+    
+    
+    
+            # Cache the fully-processed result for reuse across versions
+            # (Only store on slow path — skip if this file was already cached)
+            if _fp_str not in _processed_events_cache:
+                import copy as _copy
+                _processed_events_cache[_fp_str] = {
+                    'events':    _copy.deepcopy(events),
+                    'base_time': base_time_pre_filter,
+                }
 
         # Check if dmwm file
         if is_dmwm:
