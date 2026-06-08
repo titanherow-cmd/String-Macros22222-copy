@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.41
+  Current version: v3.19.42
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,14 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.42: Fixed UnboundLocalError on _drag_idx_cache.
+            ROOT CAUSE: _drag_idx_cache only assigned inside
+            `if not is_raw and not is_click_sensitive and rng.random() < 0.50`.
+            When false (raw files, click-sensitive, or 50% RNG miss),
+            variable never set but referenced in insert_idle_mouse_movements
+            call below. FIX: _drag_idx_cache = None before the conditional
+            in both copies. insert_idle_mouse_movements handles None
+            correctly (falls back to build_drag_index_set internally).
 - v3.19.41: Cache hit path changed from copy.deepcopy to list
             comprehension. deepcopy: 0.583ms. List comprehension: 0.040ms.
             14.6x speedup on cache hits. Safe because all event field
@@ -1174,7 +1182,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.41"
+VERSION = "v3.19.42"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -3431,6 +3439,7 @@ def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
     # The multiplier can express itself as a short natural hesitation inserted
     # directly between recorded events rather than only making buffers longer.
     # Duration: rng.uniform(200, 800) * mult ms. Skipped for raw + click-sensitive.
+    _drag_idx_cache = None  # initialized here so Step 4 can reuse it if built
     if not is_raw and not is_click_sensitive and rng.random() < 0.50:
         _mid_ms = min(rng.uniform(200.0, 800.0) * mult, _MAX_SINGLE_PAUSE_MS)
         # Reuse drag index if already built; avoid building twice per cycle
@@ -5080,7 +5089,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.41"
+VERSION = "v3.19.42"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -7945,6 +7954,7 @@ def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
     # The multiplier can express itself as a short natural hesitation inserted
     # directly between recorded events rather than only making buffers longer.
     # Duration: rng.uniform(200, 800) * mult ms. Skipped for raw + click-sensitive.
+    _drag_idx_cache = None  # initialized here so Step 4 can reuse it if built
     if not is_raw and not is_click_sensitive and rng.random() < 0.50:
         _mid_ms = min(rng.uniform(200.0, 800.0) * mult, _MAX_SINGLE_PAUSE_MS)
         # Reuse drag index if already built; avoid building twice per cycle
