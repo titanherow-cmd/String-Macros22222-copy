@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.42
+  Current version: v3.19.43
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,22 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.43: Two click-protection hardening fixes.
+            FIX 1 — DragEnd added to jitter exclusion click_types.
+            Previously jitter excluded MMs within 1000ms of DragStart
+            but NOT DragEnd. A MM at DS+1050ms / DE+950ms was outside
+            the DS exclusion zone and eligible for jitter, inserting
+            random micro-movements in the post-release window just before
+            a subsequent action. DragEnd now anchors its own 1000ms
+            before+after exclusion zone. Applied to both copies.
+            FIX 2 — detect_rapid_click_sequences pixel tolerance raised
+            from 10px to 20px, matching Part B soft-path _RAPID_POS_TOL_SOFT.
+            Clicks 11-20px apart were caught by Part B's soft-path for the
+            direct DE→DS case, but NOT by detect_rapid_click_sequences.
+            Inter-click MMs in that gap were therefore unprotected from
+            intra-file and mid-event pause injection. Now consistent:
+            any two clicks <=20px apart within 2s are fully protected.
+            Applied to both copies of detect_rapid_click_sequences.
 - v3.19.42: Fixed UnboundLocalError on _drag_idx_cache.
             ROOT CAUSE: _drag_idx_cache only assigned inside
             `if not is_raw and not is_click_sensitive and rng.random() < 0.50`.
@@ -1182,7 +1198,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.42"
+VERSION = "v3.19.43"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -1565,8 +1581,8 @@ def detect_rapid_click_sequences(events):
     Detect sequences of rapid clicks at similar coordinates.
 
     Detects:
-    - Double clicks (2 clicks within 500ms, +/-10 pixels)
-    - Spam clicks  (3+ clicks within 2 seconds, +/-10 pixels)
+    - Double clicks (2 clicks within 500ms, +/-20 pixels)
+    - Spam clicks  (3+ clicks within 2 seconds, +/-20 pixels)
 
     Detection set: Click, DragStart, LeftDown, LeftUp, RightDown, RightUp.
     LeftDown/LeftUp are included because source files often use native button
@@ -1629,7 +1645,7 @@ def detect_rapid_click_sequences(events):
 
                 if next_x is not None and next_y is not None:
                     dist = ((next_x - first_x) ** 2 + (next_y - first_y) ** 2) ** 0.5
-                    if dist <= 10:
+                    if dist <= 20:  # 20px matches Part B soft-path tolerance
                         click_sequence.append(j)
 
             j += 1
@@ -1675,7 +1691,7 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
         return events, 0, 0, 0.0
     
     # Step 1: Find ALL click times (any click-like event)
-    click_types = {'Click', 'LeftDown', 'LeftUp', 'RightDown', 'RightUp', 'DragStart'}
+    click_types = {'Click', 'LeftDown', 'LeftUp', 'RightDown', 'RightUp', 'DragStart', 'DragEnd'}
     click_times_sorted = sorted(
         event.get('Time', 0) for event in events if event.get('Type') in click_types
     )
@@ -5089,7 +5105,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.42"
+VERSION = "v3.19.43"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -6089,8 +6105,8 @@ def detect_rapid_click_sequences(events):
     Detect sequences of rapid clicks at similar coordinates.
 
     Detects:
-    - Double clicks (2 clicks within 500ms, +/-10 pixels)
-    - Spam clicks  (3+ clicks within 2 seconds, +/-10 pixels)
+    - Double clicks (2 clicks within 500ms, +/-20 pixels)
+    - Spam clicks  (3+ clicks within 2 seconds, +/-20 pixels)
 
     Detection set: Click, DragStart, LeftDown, LeftUp, RightDown, RightUp.
     LeftDown/LeftUp are included because source files often use native button
@@ -6153,7 +6169,7 @@ def detect_rapid_click_sequences(events):
 
                 if next_x is not None and next_y is not None:
                     dist = ((next_x - first_x) ** 2 + (next_y - first_y) ** 2) ** 0.5
-                    if dist <= 10:
+                    if dist <= 20:  # 20px matches Part B soft-path tolerance
                         click_sequence.append(j)
 
             j += 1
@@ -6199,7 +6215,7 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
         return events, 0, 0, 0.0
     
     # Step 1: Find ALL click times (any click-like event)
-    click_types = {'Click', 'LeftDown', 'LeftUp', 'RightDown', 'RightUp', 'DragStart'}
+    click_types = {'Click', 'LeftDown', 'LeftUp', 'RightDown', 'RightUp', 'DragStart', 'DragEnd'}
     click_times_sorted = sorted(
         event.get('Time', 0) for event in events if event.get('Type') in click_types
     )
