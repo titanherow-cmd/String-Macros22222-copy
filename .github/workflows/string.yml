@@ -1,4 +1,4 @@
-name: String macros (v3.18.88 - 7z compression + subfolder filtering)
+name: String macros (v3.19.41 - 7z compression + subfolder filtering)
 
 on:
   workflow_dispatch:
@@ -16,12 +16,16 @@ on:
           - '2- Crafting files'
           - 'x'
           - '3- Firemaking files'
-          - 'x'
+          - '5- FM- NoFire Zspotfire busy world- GE- intz- W- TIME SENSITIVE'
           - '4- Cooking files'
           - 'x'
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
           - 'x'
+          - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
+          - 'Finish up noted smth alch leftover'
+          - '58- Smth R2H only- Varr- zoomanvil left- W'
+          - 'F4- a full merge file'
           - 'x'
           - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
@@ -29,8 +33,18 @@ on:
           - '62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
           - '69- Pl8 smth by spacebar'
-          - 'x'
+          - 'FM+COOK straight spot - TIME SENSITIVE'
           - '7- Mining files'
+          - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
+          - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'        
+          - 'x'
+          - 'x'
+          - 'x'         
           - 'x'
           - 'x'
           - 'x'
@@ -54,15 +68,29 @@ on:
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
           - 'x'
+          - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
+          - 'Finish up noted smth alch leftover'
+          - '58- Smth R2H only- Varr- zoomanvil left- W'
+          - 'F4- a full merge file'
           - 'x'
           - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
           - '61- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
-          - '62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
+          - '62- SSmth+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
-          - '69- Pl8 smth by spacebar'
           - 'x'
+          - 'FM+COOK straight spot - TIME SENSITIVE'
           - '7- Mining files'
+          - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
+          - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'        
+          - 'x'
+          - 'x'
+          - 'x'         
           - 'x'
           - 'x'
           - 'x'
@@ -85,15 +113,29 @@ on:
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
           - 'x'
+          - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
+          - 'Finish up noted smth alch leftover'
+          - '58- Smth R2H only- Varr- zoomanvil left- W'
+          - 'F4- a full merge file'
           - 'x'
           - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
           - '61- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
-          - '62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
+          - '62- SSmth+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
-          - '69- Pl8 smth by spacebar'
           - 'x'
+          - 'FM+COOK straight spot - TIME SENSITIVE'
           - '7- Mining files'
+          - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
+          - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'
+          - 'x'        
+          - 'x'
+          - 'x'
+          - 'x'         
           - 'x'
           - 'x'
           - 'x'
@@ -291,12 +333,12 @@ jobs:
               ls -la "output/$BUNDLE_NAME"
 
               cd "output/$BUNDLE_NAME"
-              7z a -mx=9 -mmt=2 "../../$ZIP_FILE" .
+              7z a -mx=5 -mmt=4 "../../$ZIP_FILE" .
               cd ../..
               echo "✓ Created flat structure: $ZIP_FILE"
             else
               echo "Normal mode: Creating standard 7z structure..."
-              7z a -mx=9 -mmt=2 "$ZIP_FILE" "output/$BUNDLE_NAME"
+              7z a -mx=5 -mmt=4 "$ZIP_FILE" "output/$BUNDLE_NAME"
               echo "✓ Created: $ZIP_FILE"
             fi
           else
