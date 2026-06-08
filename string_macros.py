@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.43
+  Current version: v3.19.44
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,15 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.44: _add_right_click target changed from nearby offset to safe
+            neutral zone. Previously right-clicked at cur_x±20-200px /
+            cur_y±15-140px — could land near recorded macro cursor areas
+            and interact with game objects. Now always moves to one of
+            four pre-defined safe zones (minimap area x=548-700,y=10-160
+            or interface panel x=548-730,y=340-500) before clicking.
+            These regions are inert to right-click in OSRS and far from
+            the game viewport where macro actions occur. Zone chosen
+            randomly per call so pattern stays varied. Both copies.
 - v3.19.43: Two click-protection hardening fixes.
             FIX 1 — DragEnd added to jitter exclusion click_types.
             Previously jitter excluded MMs within 1000ms of DragStart
@@ -1198,7 +1207,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.43"
+VERSION = "v3.19.44"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -2992,16 +3001,26 @@ def _add_cursor_pause(events, timeline, rng, cur_x, cur_y):
 
 def _add_right_click(events, timeline, rng, cur_x, cur_y):
     """
-    Approach a random nearby position then right-click.
-    Approach speed, offset range, hover time, and hold duration all vary per call.
+    Move to a safe neutral zone far from recorded macro cursor positions,
+    then right-click there. The target is always in the minimap or
+    interface panel area (top-right / bottom-right of OSRS screen) —
+    far from the game viewport where macro actions occur.
+    Approach speed, hover time, and hold duration all vary per call.
     Returns (timeline, x, y).
     """
-    t  = timeline + _safe_gap(rng)
-    # Randomise offset range per call: small twitch vs large repositioning
-    off_x = rng.randint(20, 200)
-    off_y = rng.randint(15, 140)
-    tx = max(100, min(1800, cur_x + rng.randint(-off_x, off_x)))
-    ty = max(100, min(1000, cur_y + rng.randint(-off_y, off_y)))
+    t = timeline + _safe_gap(rng)
+    # Safe zone: minimap area (top-right) or interface panel (bottom-right).
+    # These regions are inert to right-click in OSRS and far from game viewport.
+    # Two safe zones picked randomly per call so the pattern stays varied.
+    _SAFE_ZONES = [
+        (548, 620, 10,  80),   # minimap top-right
+        (548, 700, 81, 160),   # minimap lower
+        (548, 730, 340, 430),  # interface panel top
+        (548, 730, 431, 500),  # interface panel mid
+    ]
+    zone = rng.choice(_SAFE_ZONES)
+    tx = rng.randint(zone[0], zone[1])
+    ty = rng.randint(zone[2], zone[3])
     spd_lo = rng.uniform(100.0, 300.0)
     move_dur = _human_interval(rng, spd_lo, spd_lo + rng.uniform(200.0, 700.0))
     path = generate_human_path(cur_x, cur_y, tx, ty, int(move_dur), rng)
@@ -5105,7 +5124,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.43"
+VERSION = "v3.19.44"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -7507,16 +7526,26 @@ def _add_cursor_pause(events, timeline, rng, cur_x, cur_y):
 
 def _add_right_click(events, timeline, rng, cur_x, cur_y):
     """
-    Approach a random nearby position then right-click.
-    Approach speed, offset range, hover time, and hold duration all vary per call.
+    Move to a safe neutral zone far from recorded macro cursor positions,
+    then right-click there. The target is always in the minimap or
+    interface panel area (top-right / bottom-right of OSRS screen) —
+    far from the game viewport where macro actions occur.
+    Approach speed, hover time, and hold duration all vary per call.
     Returns (timeline, x, y).
     """
-    t  = timeline + _safe_gap(rng)
-    # Randomise offset range per call: small twitch vs large repositioning
-    off_x = rng.randint(20, 200)
-    off_y = rng.randint(15, 140)
-    tx = max(100, min(1800, cur_x + rng.randint(-off_x, off_x)))
-    ty = max(100, min(1000, cur_y + rng.randint(-off_y, off_y)))
+    t = timeline + _safe_gap(rng)
+    # Safe zone: minimap area (top-right) or interface panel (bottom-right).
+    # These regions are inert to right-click in OSRS and far from game viewport.
+    # Two safe zones picked randomly per call so the pattern stays varied.
+    _SAFE_ZONES = [
+        (548, 620, 10,  80),   # minimap top-right
+        (548, 700, 81, 160),   # minimap lower
+        (548, 730, 340, 430),  # interface panel top
+        (548, 730, 431, 500),  # interface panel mid
+    ]
+    zone = rng.choice(_SAFE_ZONES)
+    tx = rng.randint(zone[0], zone[1])
+    ty = rng.randint(zone[2], zone[3])
     spd_lo = rng.uniform(100.0, 300.0)
     move_dur = _human_interval(rng, spd_lo, spd_lo + rng.uniform(200.0, 700.0))
     path = generate_human_path(cur_x, cur_y, tx, ty, int(move_dur), rng)
