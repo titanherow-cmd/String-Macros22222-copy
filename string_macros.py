@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.44
+  Current version: v3.19.45
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,14 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.45: Group subfolder wrapping made opt-in via --group-subfolders
+            flag (default: OFF). Previously group children were always
+            wrapped inside (bundle_id) skill_name/ in the output bundle.
+            Now flat by default — group children output as
+            (bundle_id) subfolder_name/ directly under bundle_dir.
+            Pass --group-subfolders to restore the nested structure.
+            YML: new boolean toggle 'group_subfolders' (default: false).
+            Applied to both copies.
 - v3.19.44: _add_right_click target changed from nearby offset to safe
             neutral zone. Previously right-clicked at cur_x±20-200px /
             cur_y±15-140px — could land near recorded macro cursor areas
@@ -1207,7 +1215,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.44"
+VERSION = "v3.19.45"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -4290,6 +4298,8 @@ def main():
     parser.add_argument("--bundle-id", type=int, required=True)
     parser.add_argument("--no-chat", action="store_true", help="Disable chat inserts")
     parser.add_argument("--specific-folders", type=str, help="Path to file with specific folder names to include (one per line)")
+    parser.add_argument("--group-subfolders", action="store_true", default=False,
+                        help="Wrap group-child folders inside (bundle_id) skill_name/ in output (default: off)")
     args = parser.parse_args()
     
     print("="*70)
@@ -4824,8 +4834,8 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
-        if _group_name:
-            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
+        if _group_name and args.group_subfolders:
+            # Group child + wrapping ON: nest inside (bundle_id) skill_name/ subfolder
             _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
@@ -5124,7 +5134,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.44"
+VERSION = "v3.19.45"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -8815,6 +8825,8 @@ def main():
     parser.add_argument("--bundle-id", type=int, required=True)
     parser.add_argument("--no-chat", action="store_true", help="Disable chat inserts")
     parser.add_argument("--specific-folders", type=str, help="Path to file with specific folder names to include (one per line)")
+    parser.add_argument("--group-subfolders", action="store_true", default=False,
+                        help="Wrap group-child folders inside (bundle_id) skill_name/ in output (default: off)")
     args = parser.parse_args()
     
     print("="*70)
@@ -9349,8 +9361,8 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
-        if _group_name:
-            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
+        if _group_name and args.group_subfolders:
+            # Group child + wrapping ON: nest inside (bundle_id) skill_name/ subfolder
             _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
