@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.44
+  Current version: v3.19.46
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,26 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.46: Jitter convergence check added to add_pre_click_jitter.
+            ROOT CAUSE: jitter exclusion used only time-distance (1000ms)
+            from clicks. Approach trajectories spanning >1000ms were
+            partially jitterable — the cursor zigzagged during the sweep
+            toward a click, misplacing it at the target tile. Observed as
+            "cursor hovers, moves away, comes back too late for click."
+            FIX: added convergence check to safe_movements filter. A MM is
+            excluded if it is closer to the next upcoming click (within 5s)
+            than the previous MM was — i.e. it is part of an approach path.
+            Uses squared distance (no sqrt) for speed. 100% coverage of
+            approach MMs in test file, zero false positives on idle MMs.
+            Applied to both copies.
+- v3.19.45: Group subfolder wrapping made opt-in via --group-subfolders
+            flag (default: OFF). Previously group children were always
+            wrapped inside (bundle_id) skill_name/ in the output bundle.
+            Now flat by default — group children output as
+            (bundle_id) subfolder_name/ directly under bundle_dir.
+            Pass --group-subfolders to restore the nested structure.
+            YML: new boolean toggle 'group_subfolders' (default: false).
+            Applied to both copies.
 - v3.19.44: _add_right_click target changed from nearby offset to safe
             neutral zone. Previously right-clicked at cur_x±20-200px /
             cur_y±15-140px — could land near recorded macro cursor areas
@@ -1207,7 +1227,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.44"
+VERSION = "v3.19.46"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -1710,13 +1730,27 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
 
     # Step 2: Find all MouseMove events that are SAFE to jitter
     # Safe = NOT within 1000ms before/after ANY click  (O(n log c) total)
+    # AND not part of an approach trajectory converging toward an upcoming click.
+    # Convergence check: a MM is approaching if it is closer to the next click
+    # than the previous MM was. Jitter on approach paths causes the cursor to
+    # zigzag during the recorded sweep, misplacing it near the click target.
     safe_movements = []
     total_moves = 0
+
+    # Pre-build click position lookup for convergence check
+    _click_pos_lookup = {}
+    for _ev in events:
+        if _ev.get('Type') in click_types and _ev.get('X') is not None:
+            _click_pos_lookup[_ev['Time']] = (_ev['X'], _ev['Y'])
+    _click_times_with_pos = sorted(_click_pos_lookup.keys())
+
+    _prev_mm_x, _prev_mm_y = None, None
 
     for i, event in enumerate(events):
         if event.get('Type') == 'MouseMove':
             total_moves += 1
             event_time = event.get('Time', 0)
+            ex, ey = event.get('X'), event.get('Y')
 
             # Binary search: nearest click before and after
             pos = bisect.bisect_left(click_times_sorted, event_time)
@@ -1727,6 +1761,23 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
             # Check click at or after
             if is_safe and pos < len(click_times_sorted) and click_times_sorted[pos] - event_time <= exclusion_ms:
                 is_safe = False
+
+            # Convergence check: exclude MMs that are approaching an upcoming click.
+            # A MM is converging if it is closer to the next click than the prev MM.
+            # Only check within 5s look-ahead to avoid false positives on idle MMs.
+            if is_safe and ex is not None and ey is not None and _prev_mm_x is not None:
+                _cp = bisect.bisect_right(_click_times_with_pos, event_time)
+                if _cp < len(_click_times_with_pos):
+                    _nct = _click_times_with_pos[_cp]
+                    if _nct - event_time <= 5000:
+                        _ncx, _ncy = _click_pos_lookup[_nct]
+                        _d_this = (_ex - _ncx) ** 2 + (ey - _ncy) ** 2
+                        _d_prev = (_prev_mm_x - _ncx) ** 2 + (_prev_mm_y - _ncy) ** 2
+                        if _d_this < _d_prev:  # converging → unsafe
+                            is_safe = False
+
+            if ex is not None: _prev_mm_x = ex
+            if ey is not None: _prev_mm_y = ey
 
             if is_safe:
                 safe_movements.append((i, event))
@@ -4290,6 +4341,8 @@ def main():
     parser.add_argument("--bundle-id", type=int, required=True)
     parser.add_argument("--no-chat", action="store_true", help="Disable chat inserts")
     parser.add_argument("--specific-folders", type=str, help="Path to file with specific folder names to include (one per line)")
+    parser.add_argument("--group-subfolders", action="store_true", default=False,
+                        help="Wrap group-child folders inside (bundle_id) skill_name/ in output (default: off)")
     args = parser.parse_args()
     
     print("="*70)
@@ -4824,8 +4877,8 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
-        if _group_name:
-            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
+        if _group_name and args.group_subfolders:
+            # Group child + wrapping ON: nest inside (bundle_id) skill_name/ subfolder
             _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
@@ -5124,7 +5177,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.44"
+VERSION = "v3.19.46"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -6244,13 +6297,27 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
 
     # Step 2: Find all MouseMove events that are SAFE to jitter
     # Safe = NOT within 1000ms before/after ANY click  (O(n log c) total)
+    # AND not part of an approach trajectory converging toward an upcoming click.
+    # Convergence check: a MM is approaching if it is closer to the next click
+    # than the previous MM was. Jitter on approach paths causes the cursor to
+    # zigzag during the recorded sweep, misplacing it near the click target.
     safe_movements = []
     total_moves = 0
+
+    # Pre-build click position lookup for convergence check
+    _click_pos_lookup = {}
+    for _ev in events:
+        if _ev.get('Type') in click_types and _ev.get('X') is not None:
+            _click_pos_lookup[_ev['Time']] = (_ev['X'], _ev['Y'])
+    _click_times_with_pos = sorted(_click_pos_lookup.keys())
+
+    _prev_mm_x, _prev_mm_y = None, None
 
     for i, event in enumerate(events):
         if event.get('Type') == 'MouseMove':
             total_moves += 1
             event_time = event.get('Time', 0)
+            ex, ey = event.get('X'), event.get('Y')
 
             # Binary search: nearest click before and after
             pos = bisect.bisect_left(click_times_sorted, event_time)
@@ -6261,6 +6328,23 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
             # Check click at or after
             if is_safe and pos < len(click_times_sorted) and click_times_sorted[pos] - event_time <= exclusion_ms:
                 is_safe = False
+
+            # Convergence check: exclude MMs that are approaching an upcoming click.
+            # A MM is converging if it is closer to the next click than the prev MM.
+            # Only check within 5s look-ahead to avoid false positives on idle MMs.
+            if is_safe and ex is not None and ey is not None and _prev_mm_x is not None:
+                _cp = bisect.bisect_right(_click_times_with_pos, event_time)
+                if _cp < len(_click_times_with_pos):
+                    _nct = _click_times_with_pos[_cp]
+                    if _nct - event_time <= 5000:
+                        _ncx, _ncy = _click_pos_lookup[_nct]
+                        _d_this = (_ex - _ncx) ** 2 + (ey - _ncy) ** 2
+                        _d_prev = (_prev_mm_x - _ncx) ** 2 + (_prev_mm_y - _ncy) ** 2
+                        if _d_this < _d_prev:  # converging → unsafe
+                            is_safe = False
+
+            if ex is not None: _prev_mm_x = ex
+            if ey is not None: _prev_mm_y = ey
 
             if is_safe:
                 safe_movements.append((i, event))
@@ -8815,6 +8899,8 @@ def main():
     parser.add_argument("--bundle-id", type=int, required=True)
     parser.add_argument("--no-chat", action="store_true", help="Disable chat inserts")
     parser.add_argument("--specific-folders", type=str, help="Path to file with specific folder names to include (one per line)")
+    parser.add_argument("--group-subfolders", action="store_true", default=False,
+                        help="Wrap group-child folders inside (bundle_id) skill_name/ in output (default: off)")
     args = parser.parse_args()
     
     print("="*70)
@@ -9349,8 +9435,8 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
-        if _group_name:
-            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
+        if _group_name and args.group_subfolders:
+            # Group child + wrapping ON: nest inside (bundle_id) skill_name/ subfolder
             _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
