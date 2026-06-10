@@ -1,4 +1,4 @@
-name: String macros (v3.19.45 - 7z compression + subfolder filtering)
+name: String macros (v3.19.41 - 7z compression + subfolder filtering)
 
 on:
   workflow_dispatch:
@@ -16,16 +16,11 @@ on:
           - '2- Crafting files'
           - 'x'
           - '3- Firemaking files'
-          - '5- FM- NoFire Zspotfire busy world- GE- intz- W- TIME SENSITIVE'
+          - 'x'
           - '4- Cooking files'
           - 'x'
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
-          - 'x'
-          - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
-          - 'Finish up noted smth alch leftover'
-          - '58- Smth R2H only- Varr- zoomanvil left- W'
-          - 'F4- a full merge file'
           - 'x'
           - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
@@ -33,21 +28,11 @@ on:
           - '62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
           - '69- Pl8 smth by spacebar'
-          - 'FM+COOK straight spot - TIME SENSITIVE'
+          - 'x'
+          - '6.5- Finish up noted smth alch leftover'
+          - 'x'
           - '7- Mining files'
-          - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
-          - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
-          - 'x'
-          - 'x'
-          - 'x'
-          - 'x'
-          - 'x'        
-          - 'x'
-          - 'x'
-          - 'x'         
-          - 'x'
-          - 'x'
-          - 'x'
+
           
       folder_2:
         description: 'Folder 2'
@@ -68,32 +53,16 @@ on:
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
           - 'x'
-          - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
-          - 'Finish up noted smth alch leftover'
-          - '58- Smth R2H only- Varr- zoomanvil left- W'
-          - 'F4- a full merge file'
-          - 'x'
           - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
           - '61- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
-          - '62- SSmth+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
+          - '62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
+          - '69- Pl8 smth by spacebar'
           - 'x'
-          - 'FM+COOK straight spot - TIME SENSITIVE'
+          - '6.5- Finish up noted smth alch leftover'
+          - 'x'
           - '7- Mining files'
-          - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
-          - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
-          - 'x'
-          - 'x'
-          - 'x'
-          - 'x'
-          - 'x'        
-          - 'x'
-          - 'x'
-          - 'x'         
-          - 'x'
-          - 'x'
-          - 'x'
       folder_3:
         description: 'Folder 3'
         required: false
@@ -113,32 +82,16 @@ on:
           - '5- Fishing files'
           - 'Fishing click+time sensitive - Copy'
           - 'x'
-          - '20- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
-          - 'Finish up noted smth alch leftover'
-          - '58- Smth R2H only- Varr- zoomanvil left- W'
-          - 'F4- a full merge file'
-          - 'x'
           - '6- Smithing files'
           - '60- Smth R2H only- Varr- zoomanvil left- W'
           - '61- Smth R2H+NotedAlch- Varr- zoomanvil left- W'
-          - '62- SSmth+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
+          - '62- Smth Only+Smth R2H+NotedAlch- Varr- zoomanvil left- W'
           - '63- Smth R2H+NotedAlch- spotbox W'
+          - '69- Pl8 smth by spacebar'
           - 'x'
-          - 'FM+COOK straight spot - TIME SENSITIVE'
+          - '6.5- Finish up noted smth alch leftover'
+          - 'x'
           - '7- Mining files'
-          - '55- mMining- alkharid U1T- inz- N- TIME SENSITIVE'
-          - '61- Mining- Mining Guild- inz- N- TIME SENSITIVE'
-          - 'x'
-          - 'x'
-          - 'x'
-          - 'x'
-          - 'x'        
-          - 'x'
-          - 'x'
-          - 'x'         
-          - 'x'
-          - 'x'
-          - 'x'
       versions:
         description: 'Total versions to generate *'
         required: true
@@ -149,11 +102,6 @@ on:
         default: '1'
       enable_chat:
         description: 'Enable chat inserts (20% of files)'
-        required: false
-        default: false
-        type: boolean
-      group_subfolders:
-        description: 'Wrap skill group subfolders inside (batch) SkillName/ in output'
         required: false
         default: false
         type: boolean
@@ -254,11 +202,6 @@ jobs:
           else
             echo "Chat: DISABLED"
           fi
-          if [ "${{ inputs.group_subfolders }}" = "true" ]; then
-            echo "Group subfolders: ENABLED"
-          else
-            echo "Group subfolders: DISABLED (flat)"
-          fi
           echo "Folder mode: ${{ env.FOLDERS_SOURCE }}"
           if [ -n "${{ env.FOLDERS_FILE }}" ]; then
             echo "Folders to process:"
@@ -280,10 +223,6 @@ jobs:
 
           if [ "${{ inputs.enable_chat }}" = "false" ]; then
             ARGS+=("--no-chat")
-          fi
-
-          if [ "${{ inputs.group_subfolders }}" = "true" ]; then
-            ARGS+=("--group-subfolders")
           fi
 
           if [ "${{ env.USE_SPECIFIC }}" = "true" ] && [ -n "${{ env.FOLDERS_FILE }}" ]; then
