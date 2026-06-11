@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.47
+  Current version: v3.19.48
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,8 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.48: Fixed NameError '_ex' in convergence check (v3.19.46).
+            Typo: _ex should be ex. Both copies. One-character fix.
 - v3.19.47: Start buffer added. timeline initialised to
             rng.uniform(5000.0, 8000.0)ms instead of 0. Produces 5–8s
             of silence before the first event in every strung file,
@@ -1232,7 +1234,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.47"
+VERSION = "v3.19.48"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -1776,7 +1778,7 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
                     _nct = _click_times_with_pos[_cp]
                     if _nct - event_time <= 5000:
                         _ncx, _ncy = _click_pos_lookup[_nct]
-                        _d_this = (_ex - _ncx) ** 2 + (ey - _ncy) ** 2
+                        _d_this = (ex - _ncx) ** 2 + (ey - _ncy) ** 2
                         _d_prev = (_prev_mm_x - _ncx) ** 2 + (_prev_mm_y - _ncy) ** 2
                         if _d_this < _d_prev:  # converging → unsafe
                             is_safe = False
@@ -5184,7 +5186,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.47"
+VERSION = "v3.19.48"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -6345,7 +6347,7 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
                     _nct = _click_times_with_pos[_cp]
                     if _nct - event_time <= 5000:
                         _ncx, _ncy = _click_pos_lookup[_nct]
-                        _d_this = (_ex - _ncx) ** 2 + (ey - _ncy) ** 2
+                        _d_this = (ex - _ncx) ** 2 + (ey - _ncy) ** 2
                         _d_prev = (_prev_mm_x - _ncx) ** 2 + (_prev_mm_y - _ncy) ** 2
                         if _d_this < _d_prev:  # converging → unsafe
                             is_safe = False
