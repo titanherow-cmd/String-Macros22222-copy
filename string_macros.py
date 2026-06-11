@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.48
+  Current version: v3.19.50
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,21 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.50: Group subfolder wrapping restored to always-on.
+            v3.19.45 made it opt-in via --group-subfolders (default off),
+            removing the wrapping by default. Reverted: _group_name check
+            no longer gated on args.group_subfolders. Group children always
+            wrap inside (bundle_id) skill_name/ e.g. (543) 1- Woodcutting
+            files/ containing all its subfolders. Both copies.
+- v3.19.49: Fixed convergence check blind spot on first MM in file.
+            _prev_mm_x/_prev_mm_y were initialised to None, causing the
+            convergence check to be skipped entirely for the very first
+            MouseMove in the event list (no previous position to compare).
+            That MM was always jitter-eligible even if it was part of an
+            approach to the first click. Fix: seed _prev_mm_x/_prev_mm_y
+            from the position of the first click in the event list, so
+            any MM converging toward it from the start is correctly
+            excluded. Applied to both copies.
 - v3.19.48: Fixed NameError '_ex' in convergence check (v3.19.46).
             Typo: _ex should be ex. Both copies. One-character fix.
 - v3.19.47: Start buffer added. timeline initialised to
@@ -1234,7 +1249,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.48"
+VERSION = "v3.19.50"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -1751,7 +1766,13 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
             _click_pos_lookup[_ev['Time']] = (_ev['X'], _ev['Y'])
     _click_times_with_pos = sorted(_click_pos_lookup.keys())
 
-    _prev_mm_x, _prev_mm_y = None, None
+    # Seed prev position from first click so convergence check
+    # is active even for the very first MM in the event list.
+    _first_click = next(
+        (e for e in events if e.get('Type') in click_types and e.get('X') is not None),
+        None)
+    _prev_mm_x = _first_click['X'] if _first_click else None
+    _prev_mm_y = _first_click['Y'] if _first_click else None
 
     for i, event in enumerate(events):
         if event.get('Type') == 'MouseMove':
@@ -4886,8 +4907,8 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
-        if _group_name and args.group_subfolders:
-            # Group child + wrapping ON: nest inside (bundle_id) skill_name/ subfolder
+        if _group_name:
+            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
             _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
@@ -5186,7 +5207,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.48"
+VERSION = "v3.19.50"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -6320,7 +6341,13 @@ def add_pre_click_jitter(events: list, rng: random.Random) -> tuple:
             _click_pos_lookup[_ev['Time']] = (_ev['X'], _ev['Y'])
     _click_times_with_pos = sorted(_click_pos_lookup.keys())
 
-    _prev_mm_x, _prev_mm_y = None, None
+    # Seed prev position from first click so convergence check
+    # is active even for the very first MM in the event list.
+    _first_click = next(
+        (e for e in events if e.get('Type') in click_types and e.get('X') is not None),
+        None)
+    _prev_mm_x = _first_click['X'] if _first_click else None
+    _prev_mm_y = _first_click['Y'] if _first_click else None
 
     for i, event in enumerate(events):
         if event.get('Type') == 'MouseMove':
@@ -9446,8 +9473,8 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
-        if _group_name and args.group_subfolders:
-            # Group child + wrapping ON: nest inside (bundle_id) skill_name/ subfolder
+        if _group_name:
+            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
             _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
