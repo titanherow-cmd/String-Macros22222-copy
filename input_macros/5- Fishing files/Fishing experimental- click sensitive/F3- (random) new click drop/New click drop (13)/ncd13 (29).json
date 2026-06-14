@@ -1,0 +1,26 @@
+[
+  {
+    "Type": "KeyUp",
+    "Time": 109,
+    "X": null,
+    "Y": null,
+    "Delta": null,
+    "KeyCode": 35
+  },
+  {
+    "Type": "DragStart",
+    "Time": 1251,
+    "X": 897,
+    "Y": 399,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "DragEnd",
+    "Time": 1375,
+    "X": 897,
+    "Y": 399,
+    "Delta": null,
+    "KeyCode": null
+  }
+]
