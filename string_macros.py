@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.50
+  Current version: v3.19.51
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,21 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.51: New folder tag: (random). Add to any F-step folder that
+            contains numbered sub-subfolders (1/, 2/, 3/, ...). Each
+            cycle, the code picks exactly ONE file from EACH sub-subfolder
+            in a freshly randomised order, strings them all, then continues
+            to the next F-step as normal. Example:
+              F6- (random) click drop/
+                1/   <- 1 file picked
+                2/   <- 1 file picked
+                3/   <- 1 file picked
+            Order of 1/2/3 is shuffled each cycle. No AF/AL wrapping
+            on the individual files (they are standalone picks).
+            Detection in scan_for_numbered_subfolders (is_random flag).
+            Branching in get_next_combination (shuffled pick-one-per-sub).
+            _play_nested_group skips AF/AL for _random_single items.
+            Applied to both copies.
 - v3.19.50: Group subfolder wrapping restored to always-on.
             v3.19.45 made it opt-in via --group-subfolders (default off),
             removing the wrapping by default. Reverted: _group_name check
@@ -1249,7 +1264,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.50"
+VERSION = "v3.19.51"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -2893,8 +2908,15 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         """Play all loops for a nested folder slot.
         AF fires ONCE before all loops; AL fires ONCE after all loops.
         Pattern: [AF] -> loop1 -> loop2 -> ... -> [AL]
+        (random) items: no AF/AL wrapping — each is a single file from one sub-subfolder,
+        played directly in the pre-shuffled order.
         """
         if not nested_items_list:
+            return
+        # (random) slots: items are individual files, not looped combos — skip AF/AL
+        if nested_items_list[0].get('_random_single'):
+            for _ni in nested_items_list:
+                _play_nested_loop(_ni)
             return
         _naf = _pick_af_al(nested_items_list[0].get('nested_root_af', []), rng)
         _nal = _pick_af_al(nested_items_list[0].get('nested_root_al', []), rng)
@@ -3734,6 +3756,10 @@ def scan_for_numbered_subfolders(base_path):
             # "optional+end" combo: optional folder that ends loop if chosen
             is_optional_end = is_optional and is_end
 
+            # Check if folder is "(random)": pick 1 file from each sub-subfolder
+            # in random order, stringing them all before moving to the next step.
+            is_random = '(random)' in item.name.lower()
+
             # Detect nested numbered subfolders (e.g. F5 that has its own F1/F2/F3 inside)
             nested_subfolder_files = None
             nested_root_af = None
@@ -3751,7 +3777,8 @@ def scan_for_numbered_subfolders(base_path):
                         nested_subfolder_files = _nf
                         nested_root_af = _naf
                         nested_root_al = _nal
-                        print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside")
+                        _rtag = ' [(random) — shuffled pick-one-per-subfolder]' if is_random else ''
+                        print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside{_rtag}")
 
             if regular_files or nested_subfolder_files:
                 # SAME-NUMBER POOLING (Feature 41):
@@ -3775,6 +3802,7 @@ def scan_for_numbered_subfolders(base_path):
                     'nested_subfolder_files': nested_subfolder_files,
                     'nested_root_always_first': nested_root_af,
                     'nested_root_always_last': nested_root_al,
+                    'is_random': is_random,
                     'folder_name': item.name,   # stored for name-lookup in specific-folders
                     'folder_path': item,
                 }
@@ -4115,16 +4143,35 @@ class ManualHistoryTracker:
                 if _nsf and folder_num in self._nested_trackers:
                     _nested_tracker = self._nested_trackers[folder_num]
                     _picked_nested = []
-                    for _ in range(_n):
-                        _sub_combo = _nested_tracker.get_next_combination()
-                        if _sub_combo:
-                            _picked_nested.append({
-                                '_nested': True,
-                                'combo': _sub_combo,
-                                'nested_sf': _nsf,
-                                'nested_root_af': folder_data.get('nested_root_always_first'),
-                                'nested_root_al': folder_data.get('nested_root_always_last'),
-                            })
+                    if folder_data.get('is_random'):
+                        # (random) tag: pick exactly 1 file from EACH sub-subfolder
+                        # in a freshly shuffled order every cycle.
+                        _sub_nums = sorted(_nsf.keys())
+                        self.rng.shuffle(_sub_nums)
+                        for _sn in _sub_nums:
+                            _sf_data = _nsf[_sn]
+                            _sf_files = _sf_data.get('files', [])
+                            if _sf_files:
+                                _f = self.rng.choice(_sf_files)
+                                _picked_nested.append({
+                                    '_nested': True,
+                                    '_random_single': True,
+                                    'combo': [(_sn, [_f])],
+                                    'nested_sf': _nsf,
+                                    'nested_root_af': folder_data.get('nested_root_always_first'),
+                                    'nested_root_al': folder_data.get('nested_root_always_last'),
+                                })
+                    else:
+                        for _ in range(_n):
+                            _sub_combo = _nested_tracker.get_next_combination()
+                            if _sub_combo:
+                                _picked_nested.append({
+                                    '_nested': True,
+                                    'combo': _sub_combo,
+                                    'nested_sf': _nsf,
+                                    'nested_root_af': folder_data.get('nested_root_always_first'),
+                                    'nested_root_al': folder_data.get('nested_root_always_last'),
+                                })
                     if _picked_nested:
                         combination.append((folder_num, _picked_nested))
                 else:
@@ -5207,7 +5254,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.50"
+VERSION = "v3.19.51"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -5230,6 +5277,11 @@ FOLDER TAGS (detected in folder name, case-insensitive):
                         Can be applied to:
                         - Main folder -> ALL subfolders become time_sensitive
                         - Individual subfolders -> Only that subfolder is time_sensitive
+  - "(random)"        -> F-step folder with numbered sub-subfolders (1/, 2/, 3/, ...).
+                        Each cycle: picks exactly 1 file from EACH sub-subfolder,
+                        plays them all in a freshly randomised order, then continues.
+                        Example: F6- (random) click drop/1/, /2/, /3/ -> plays one
+                        file from each, order shuffled per cycle. No AF/AL wrapping.
   - (Decimal support: "3.5" goes between folders 3 and 4)
 
 FILE TAGS (detected in filename, case-insensitive):
@@ -7459,8 +7511,15 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         """Play all loops for a nested folder slot.
         AF fires ONCE before all loops; AL fires ONCE after all loops.
         Pattern: [AF] -> loop1 -> loop2 -> ... -> [AL]
+        (random) items: no AF/AL wrapping — each is a single file from one sub-subfolder,
+        played directly in the pre-shuffled order.
         """
         if not nested_items_list:
+            return
+        # (random) slots: items are individual files, not looped combos — skip AF/AL
+        if nested_items_list[0].get('_random_single'):
+            for _ni in nested_items_list:
+                _play_nested_loop(_ni)
             return
         _naf = _pick_af_al(nested_items_list[0].get('nested_root_af', []), rng)
         _nal = _pick_af_al(nested_items_list[0].get('nested_root_al', []), rng)
@@ -8300,6 +8359,10 @@ def scan_for_numbered_subfolders(base_path):
             # "optional+end" combo: optional folder that ends loop if chosen
             is_optional_end = is_optional and is_end
 
+            # Check if folder is "(random)": pick 1 file from each sub-subfolder
+            # in random order, stringing them all before moving to the next step.
+            is_random = '(random)' in item.name.lower()
+
             # Detect nested numbered subfolders (e.g. F5 that has its own F1/F2/F3 inside)
             nested_subfolder_files = None
             nested_root_af = None
@@ -8317,7 +8380,8 @@ def scan_for_numbered_subfolders(base_path):
                         nested_subfolder_files = _nf
                         nested_root_af = _naf
                         nested_root_al = _nal
-                        print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside")
+                        _rtag = ' [(random) — shuffled pick-one-per-subfolder]' if is_random else ''
+                        print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside{_rtag}")
 
             if regular_files or nested_subfolder_files:
                 # SAME-NUMBER POOLING (Feature 41):
@@ -8341,6 +8405,7 @@ def scan_for_numbered_subfolders(base_path):
                     'nested_subfolder_files': nested_subfolder_files,
                     'nested_root_always_first': nested_root_af,
                     'nested_root_always_last': nested_root_al,
+                    'is_random': is_random,
                     'folder_name': item.name,   # stored for name-lookup in specific-folders
                     'folder_path': item,
                 }
@@ -8681,16 +8746,35 @@ class ManualHistoryTracker:
                 if _nsf and folder_num in self._nested_trackers:
                     _nested_tracker = self._nested_trackers[folder_num]
                     _picked_nested = []
-                    for _ in range(_n):
-                        _sub_combo = _nested_tracker.get_next_combination()
-                        if _sub_combo:
-                            _picked_nested.append({
-                                '_nested': True,
-                                'combo': _sub_combo,
-                                'nested_sf': _nsf,
-                                'nested_root_af': folder_data.get('nested_root_always_first'),
-                                'nested_root_al': folder_data.get('nested_root_always_last'),
-                            })
+                    if folder_data.get('is_random'):
+                        # (random) tag: pick exactly 1 file from EACH sub-subfolder
+                        # in a freshly shuffled order every cycle.
+                        _sub_nums = sorted(_nsf.keys())
+                        self.rng.shuffle(_sub_nums)
+                        for _sn in _sub_nums:
+                            _sf_data = _nsf[_sn]
+                            _sf_files = _sf_data.get('files', [])
+                            if _sf_files:
+                                _f = self.rng.choice(_sf_files)
+                                _picked_nested.append({
+                                    '_nested': True,
+                                    '_random_single': True,
+                                    'combo': [(_sn, [_f])],
+                                    'nested_sf': _nsf,
+                                    'nested_root_af': folder_data.get('nested_root_always_first'),
+                                    'nested_root_al': folder_data.get('nested_root_always_last'),
+                                })
+                    else:
+                        for _ in range(_n):
+                            _sub_combo = _nested_tracker.get_next_combination()
+                            if _sub_combo:
+                                _picked_nested.append({
+                                    '_nested': True,
+                                    'combo': _sub_combo,
+                                    'nested_sf': _nsf,
+                                    'nested_root_af': folder_data.get('nested_root_always_first'),
+                                    'nested_root_al': folder_data.get('nested_root_always_last'),
+                                })
                     if _picked_nested:
                         combination.append((folder_num, _picked_nested))
                 else:
