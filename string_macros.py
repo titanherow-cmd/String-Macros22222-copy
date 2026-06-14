@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.51
+  Current version: v3.19.52
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,19 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.52: Extended (random) tag with two improvements.
+            1) Sub-subfolder detection now also matches bracketed numbers
+               anywhere in the folder name (e.g. 'drop sword (1)',
+               'drop shield (2)'). Previously only leading digit or F-prefix
+               was accepted. Detection: re.search(r'\(\d+\)', d.name).
+               Number extraction already handled by existing fallback regex.
+            2) New (randomN) variant: add a number directly e.g. (random10).
+               Shuffles all sub-subfolder keys then picks the first N,
+               plays 1 file from each. With 28 folders and (random10):
+               every cycle picks 10 different folders at random, plays one
+               file each, then moves on. random_max stored on slot entry,
+               applied as _sub_nums = _sub_nums[:_rmax] after shuffle.
+               Both applied to both copies.
 - v3.19.51: New folder tag: (random). Add to any F-step folder that
             contains numbered sub-subfolders (1/, 2/, 3/, ...). Each
             cycle, the code picks exactly ONE file from EACH sub-subfolder
@@ -1264,7 +1277,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.51"
+VERSION = "v3.19.52"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -3756,11 +3769,16 @@ def scan_for_numbered_subfolders(base_path):
             # "optional+end" combo: optional folder that ends loop if chosen
             is_optional_end = is_optional and is_end
 
-            # Check if folder is "(random)": pick 1 file from each sub-subfolder
-            # in random order, stringing them all before moving to the next step.
-            is_random = '(random)' in item.name.lower()
+            # Check if folder is "(random)" or "(randomN)":
+            # (random)  -> pick 1 file from ALL sub-subfolders in random order.
+            # (random10) -> pick 1 file from 10 randomly chosen sub-subfolders.
+            # Sub-subfolders are detected by leading digit OR bracketed number e.g. (1).
+            _random_match = re.search(r'\(random(\d*)\)', item.name, re.IGNORECASE)
+            is_random = bool(_random_match)
+            random_max = int(_random_match.group(1)) if (is_random and _random_match.group(1)) else None
 
             # Detect nested numbered subfolders (e.g. F5 that has its own F1/F2/F3 inside)
+            # Accepts: leading digit/F-prefix OR bracketed number anywhere in name e.g. '(1)'
             nested_subfolder_files = None
             nested_root_af = None
             nested_root_al = None
@@ -3768,7 +3786,10 @@ def scan_for_numbered_subfolders(base_path):
                 # No direct JSON files — check if there are numbered sub-subfolders
                 _nested_subdirs = [
                     d for d in item.iterdir()
-                    if d.is_dir() and re.search(r'^[Ff]?\d', d.name.strip())
+                    if d.is_dir() and (
+                        re.search(r'^[Ff]?\d', d.name.strip())  # leading digit/F-prefix
+                        or re.search(r'\(\d+\)', d.name)       # bracketed number e.g. (1)
+                    )
                 ]
                 if _nested_subdirs:
                     # Recursively scan the nested folder
@@ -3777,8 +3798,12 @@ def scan_for_numbered_subfolders(base_path):
                         nested_subfolder_files = _nf
                         nested_root_af = _naf
                         nested_root_al = _nal
-                        _rtag = ' [(random) — shuffled pick-one-per-subfolder]' if is_random else ''
-                        print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside{_rtag}")
+                        if is_random:
+                            _rlabel = f'random{random_max}' if random_max else 'random'
+                            print(f"  Nested folder detected: {item.name} has {len(_nf)} "
+                                  f"sub-folders [({_rlabel}) — pick {'up to '+str(random_max) if random_max else 'all'}, shuffled]")
+                        else:
+                            print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside")
 
             if regular_files or nested_subfolder_files:
                 # SAME-NUMBER POOLING (Feature 41):
@@ -3803,6 +3828,7 @@ def scan_for_numbered_subfolders(base_path):
                     'nested_root_always_first': nested_root_af,
                     'nested_root_always_last': nested_root_al,
                     'is_random': is_random,
+                    'random_max': random_max,
                     'folder_name': item.name,   # stored for name-lookup in specific-folders
                     'folder_path': item,
                 }
@@ -4144,10 +4170,14 @@ class ManualHistoryTracker:
                     _nested_tracker = self._nested_trackers[folder_num]
                     _picked_nested = []
                     if folder_data.get('is_random'):
-                        # (random) tag: pick exactly 1 file from EACH sub-subfolder
-                        # in a freshly shuffled order every cycle.
+                        # (random) / (randomN) tag:
+                        # Shuffle all sub-subfolder keys, then pick up to random_max
+                        # (or all if random_max is None). Pick 1 file from each chosen.
                         _sub_nums = sorted(_nsf.keys())
                         self.rng.shuffle(_sub_nums)
+                        _rmax = folder_data.get('random_max')  # None = all
+                        if _rmax and _rmax < len(_sub_nums):
+                            _sub_nums = _sub_nums[:_rmax]
                         for _sn in _sub_nums:
                             _sf_data = _nsf[_sn]
                             _sf_files = _sf_data.get('files', [])
@@ -5254,7 +5284,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.51"
+VERSION = "v3.19.52"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -5277,11 +5307,14 @@ FOLDER TAGS (detected in folder name, case-insensitive):
                         Can be applied to:
                         - Main folder -> ALL subfolders become time_sensitive
                         - Individual subfolders -> Only that subfolder is time_sensitive
-  - "(random)"        -> F-step folder with numbered sub-subfolders (1/, 2/, 3/, ...).
-                        Each cycle: picks exactly 1 file from EACH sub-subfolder,
-                        plays them all in a freshly randomised order, then continues.
-                        Example: F6- (random) click drop/1/, /2/, /3/ -> plays one
-                        file from each, order shuffled per cycle. No AF/AL wrapping.
+  - "(random)"        -> F-step folder with sub-subfolders. Each cycle: picks exactly
+                        1 file from ALL sub-subfolders in freshly randomised order.
+                        Sub-subfolders detected by leading digit OR bracketed number:
+                          'drop sword (1)', 'drop shield (2)', '3- drop helm' all work.
+  - "(randomN)"       -> Same as (random) but picks from only N randomly chosen
+                        sub-subfolders per cycle. Example: (random10) with 28 folders
+                        picks 10 different folders each cycle, shuffled, 1 file each.
+                        N resets each cycle — no repeat guarantee across cycles.
   - (Decimal support: "3.5" goes between folders 3 and 4)
 
 FILE TAGS (detected in filename, case-insensitive):
@@ -8359,11 +8392,16 @@ def scan_for_numbered_subfolders(base_path):
             # "optional+end" combo: optional folder that ends loop if chosen
             is_optional_end = is_optional and is_end
 
-            # Check if folder is "(random)": pick 1 file from each sub-subfolder
-            # in random order, stringing them all before moving to the next step.
-            is_random = '(random)' in item.name.lower()
+            # Check if folder is "(random)" or "(randomN)":
+            # (random)  -> pick 1 file from ALL sub-subfolders in random order.
+            # (random10) -> pick 1 file from 10 randomly chosen sub-subfolders.
+            # Sub-subfolders are detected by leading digit OR bracketed number e.g. (1).
+            _random_match = re.search(r'\(random(\d*)\)', item.name, re.IGNORECASE)
+            is_random = bool(_random_match)
+            random_max = int(_random_match.group(1)) if (is_random and _random_match.group(1)) else None
 
             # Detect nested numbered subfolders (e.g. F5 that has its own F1/F2/F3 inside)
+            # Accepts: leading digit/F-prefix OR bracketed number anywhere in name e.g. '(1)'
             nested_subfolder_files = None
             nested_root_af = None
             nested_root_al = None
@@ -8371,7 +8409,10 @@ def scan_for_numbered_subfolders(base_path):
                 # No direct JSON files — check if there are numbered sub-subfolders
                 _nested_subdirs = [
                     d for d in item.iterdir()
-                    if d.is_dir() and re.search(r'^[Ff]?\d', d.name.strip())
+                    if d.is_dir() and (
+                        re.search(r'^[Ff]?\d', d.name.strip())  # leading digit/F-prefix
+                        or re.search(r'\(\d+\)', d.name)       # bracketed number e.g. (1)
+                    )
                 ]
                 if _nested_subdirs:
                     # Recursively scan the nested folder
@@ -8380,8 +8421,12 @@ def scan_for_numbered_subfolders(base_path):
                         nested_subfolder_files = _nf
                         nested_root_af = _naf
                         nested_root_al = _nal
-                        _rtag = ' [(random) — shuffled pick-one-per-subfolder]' if is_random else ''
-                        print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside{_rtag}")
+                        if is_random:
+                            _rlabel = f'random{random_max}' if random_max else 'random'
+                            print(f"  Nested folder detected: {item.name} has {len(_nf)} "
+                                  f"sub-folders [({_rlabel}) — pick {'up to '+str(random_max) if random_max else 'all'}, shuffled]")
+                        else:
+                            print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside")
 
             if regular_files or nested_subfolder_files:
                 # SAME-NUMBER POOLING (Feature 41):
@@ -8406,6 +8451,7 @@ def scan_for_numbered_subfolders(base_path):
                     'nested_root_always_first': nested_root_af,
                     'nested_root_always_last': nested_root_al,
                     'is_random': is_random,
+                    'random_max': random_max,
                     'folder_name': item.name,   # stored for name-lookup in specific-folders
                     'folder_path': item,
                 }
@@ -8747,10 +8793,14 @@ class ManualHistoryTracker:
                     _nested_tracker = self._nested_trackers[folder_num]
                     _picked_nested = []
                     if folder_data.get('is_random'):
-                        # (random) tag: pick exactly 1 file from EACH sub-subfolder
-                        # in a freshly shuffled order every cycle.
+                        # (random) / (randomN) tag:
+                        # Shuffle all sub-subfolder keys, then pick up to random_max
+                        # (or all if random_max is None). Pick 1 file from each chosen.
                         _sub_nums = sorted(_nsf.keys())
                         self.rng.shuffle(_sub_nums)
+                        _rmax = folder_data.get('random_max')  # None = all
+                        if _rmax and _rmax < len(_sub_nums):
+                            _sub_nums = _sub_nums[:_rmax]
                         for _sn in _sub_nums:
                             _sf_data = _nsf[_sn]
                             _sf_files = _sf_data.get('files', [])
