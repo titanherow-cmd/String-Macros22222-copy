@@ -1,0 +1,138 @@
+[
+  {
+    "Type": "MouseMove",
+    "Time": 39,
+    "X": 1017,
+    "Y": 474,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 42,
+    "X": 1017,
+    "Y": 471,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 50,
+    "X": 1014,
+    "Y": 468,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 65,
+    "X": 1014,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 73,
+    "X": 1011,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 89,
+    "X": 1011,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "KeyUp",
+    "Time": 91,
+    "X": null,
+    "Y": null,
+    "Delta": null,
+    "KeyCode": 35
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 166,
+    "X": 1014,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 193,
+    "X": 1017,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 241,
+    "X": 1020,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 369,
+    "X": 1026,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "DragStart",
+    "Time": 579,
+    "X": 1026,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "DragEnd",
+    "Time": 674,
+    "X": 1026,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 771,
+    "X": 1026,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 1022,
+    "X": 1026,
+    "Y": 468,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 1042,
+    "X": 1029,
+    "Y": 468,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 1065,
+    "X": 1029,
+    "Y": 471,
+    "Delta": null,
+    "KeyCode": null
+  }
+]

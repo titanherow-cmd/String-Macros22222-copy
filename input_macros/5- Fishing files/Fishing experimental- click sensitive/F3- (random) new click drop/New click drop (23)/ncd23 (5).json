@@ -1,0 +1,194 @@
+[
+  {
+    "Type": "MouseMove",
+    "Time": 3,
+    "X": 963,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 20,
+    "X": 1011,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 28,
+    "X": 1023,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 42,
+    "X": 1029,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 52,
+    "X": 1032,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 100,
+    "X": 1029,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "KeyUp",
+    "Time": 100,
+    "X": null,
+    "Y": null,
+    "Delta": null,
+    "KeyCode": 35
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 111,
+    "X": 1026,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 152,
+    "X": 1020,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 172,
+    "X": 1011,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 174,
+    "X": 1008,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 182,
+    "X": 1008,
+    "Y": 459,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 190,
+    "X": 1002,
+    "Y": 459,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 198,
+    "X": 999,
+    "Y": 459,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 207,
+    "X": 996,
+    "Y": 456,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 229,
+    "X": 993,
+    "Y": 456,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 251,
+    "X": 990,
+    "Y": 456,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 451,
+    "X": 987,
+    "Y": 456,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 480,
+    "X": 984,
+    "Y": 456,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 539,
+    "X": 984,
+    "Y": 462,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 560,
+    "X": 984,
+    "Y": 465,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 576,
+    "X": 984,
+    "Y": 468,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "DragStart",
+    "Time": 856,
+    "X": 984,
+    "Y": 468,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "DragEnd",
+    "Time": 931,
+    "X": 984,
+    "Y": 468,
+    "Delta": null,
+    "KeyCode": null
+  }
+]
