@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.52
+  Current version: v3.19.53
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,15 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.53: (random) manifest now shows parent F-number not sub-number.
+            Previously files from sub-subfolders (1/, 2/, drop sword (1)/)
+            were logged as F1-, F2- etc in the manifest. Now they all show
+            as the parent step number e.g. F6- matching the F-step folder
+            that carries the (random) tag.
+            _parent_folder_num stored on each _random_single dict item.
+            _play_nested_loop accepts parent_folder_num param; uses it as
+            manifest folder_num when _random_single is True.
+            Applied to both copies.
 - v3.19.52: Extended (random) tag with two improvements.
             1) Sub-subfolder detection now also matches bracketed numbers
                anywhere in the folder name (e.g. 'drop sword (1)',
@@ -1277,7 +1286,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.52"
+VERSION = "v3.19.53"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -2893,29 +2902,34 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                                f"[DISTRACTION] {dist_path.name}")
             total_distraction_pause += (timeline - t_before)
 
-    def _play_nested_loop(nested_item):
+    def _play_nested_loop(nested_item, parent_folder_num=None):
         """Play ONE loop of the nested sub-cycle: F1->F2->F3->F4->optional.
-        AF/AL are NOT included here - they wrap ALL loops, called once by the caller."""
+        AF/AL are NOT included here - they wrap ALL loops, called once by the caller.
+        parent_folder_num: when set (for _random_single items), use it as the
+        manifest folder_num so files show as F6- instead of F1-, F2-, etc."""
         _sub_combo  = nested_item['combo']
         _nsf        = nested_item['nested_sf']
+        _is_random_single = nested_item.get('_random_single', False)
         for _sfn, _sfl in _sub_combo:
             _sfd = _nsf.get(_sfn, {})
             if not isinstance(_sfl, list):
                 _sfl = [_sfl]
+            # For (random) items use parent F-number in manifest; sub-subfolder number otherwise
+            _manifest_fn = parent_folder_num if (_is_random_single and parent_folder_num is not None) else _sfn
             _saf = _pick_af_al(_sfd.get('always_first', []), rng)
             _sal = _pick_af_al(_sfd.get('always_last',  []), rng)
             if _saf:
                 _is_dmwm = _saf in dmwm_file_set
-                add_file_to_cycle(_saf, _sfn, _is_dmwm, f"[ALWAYS FIRST] {_saf.name}")
+                add_file_to_cycle(_saf, _manifest_fn, _is_dmwm, f"[ALWAYS FIRST] {_saf.name}")
             for _fp in _sfl:
                 if isinstance(_fp, dict) and _fp.get('_nested'):
                     _play_nested_loop(_fp)
                 else:
                     _is_dmwm = _fp in dmwm_file_set
-                    add_file_to_cycle(_fp, _sfn, _is_dmwm, _fp.name)
+                    add_file_to_cycle(_fp, _manifest_fn, _is_dmwm, _fp.name)
             if _sal:
                 _is_dmwm = _sal in dmwm_file_set
-                add_file_to_cycle(_sal, _sfn, _is_dmwm, f"[ALWAYS LAST] {_sal.name}")
+                add_file_to_cycle(_sal, _manifest_fn, _is_dmwm, f"[ALWAYS LAST] {_sal.name}")
 
     def _play_nested_group(nested_items_list):
         """Play all loops for a nested folder slot.
@@ -2929,7 +2943,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # (random) slots: items are individual files, not looped combos — skip AF/AL
         if nested_items_list[0].get('_random_single'):
             for _ni in nested_items_list:
-                _play_nested_loop(_ni)
+                _play_nested_loop(_ni, parent_folder_num=_ni.get('_parent_folder_num'))
             return
         _naf = _pick_af_al(nested_items_list[0].get('nested_root_af', []), rng)
         _nal = _pick_af_al(nested_items_list[0].get('nested_root_al', []), rng)
@@ -4186,6 +4200,7 @@ class ManualHistoryTracker:
                                 _picked_nested.append({
                                     '_nested': True,
                                     '_random_single': True,
+                                    '_parent_folder_num': folder_num,  # manifest uses parent F-number
                                     'combo': [(_sn, [_f])],
                                     'nested_sf': _nsf,
                                     'nested_root_af': folder_data.get('nested_root_always_first'),
@@ -5284,7 +5299,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.52"
+VERSION = "v3.19.53"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -7516,29 +7531,34 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                                f"[DISTRACTION] {dist_path.name}")
             total_distraction_pause += (timeline - t_before)
 
-    def _play_nested_loop(nested_item):
+    def _play_nested_loop(nested_item, parent_folder_num=None):
         """Play ONE loop of the nested sub-cycle: F1->F2->F3->F4->optional.
-        AF/AL are NOT included here - they wrap ALL loops, called once by the caller."""
+        AF/AL are NOT included here - they wrap ALL loops, called once by the caller.
+        parent_folder_num: when set (for _random_single items), use it as the
+        manifest folder_num so files show as F6- instead of F1-, F2-, etc."""
         _sub_combo  = nested_item['combo']
         _nsf        = nested_item['nested_sf']
+        _is_random_single = nested_item.get('_random_single', False)
         for _sfn, _sfl in _sub_combo:
             _sfd = _nsf.get(_sfn, {})
             if not isinstance(_sfl, list):
                 _sfl = [_sfl]
+            # For (random) items use parent F-number in manifest; sub-subfolder number otherwise
+            _manifest_fn = parent_folder_num if (_is_random_single and parent_folder_num is not None) else _sfn
             _saf = _pick_af_al(_sfd.get('always_first', []), rng)
             _sal = _pick_af_al(_sfd.get('always_last',  []), rng)
             if _saf:
                 _is_dmwm = _saf in dmwm_file_set
-                add_file_to_cycle(_saf, _sfn, _is_dmwm, f"[ALWAYS FIRST] {_saf.name}")
+                add_file_to_cycle(_saf, _manifest_fn, _is_dmwm, f"[ALWAYS FIRST] {_saf.name}")
             for _fp in _sfl:
                 if isinstance(_fp, dict) and _fp.get('_nested'):
                     _play_nested_loop(_fp)
                 else:
                     _is_dmwm = _fp in dmwm_file_set
-                    add_file_to_cycle(_fp, _sfn, _is_dmwm, _fp.name)
+                    add_file_to_cycle(_fp, _manifest_fn, _is_dmwm, _fp.name)
             if _sal:
                 _is_dmwm = _sal in dmwm_file_set
-                add_file_to_cycle(_sal, _sfn, _is_dmwm, f"[ALWAYS LAST] {_sal.name}")
+                add_file_to_cycle(_sal, _manifest_fn, _is_dmwm, f"[ALWAYS LAST] {_sal.name}")
 
     def _play_nested_group(nested_items_list):
         """Play all loops for a nested folder slot.
@@ -7552,7 +7572,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # (random) slots: items are individual files, not looped combos — skip AF/AL
         if nested_items_list[0].get('_random_single'):
             for _ni in nested_items_list:
-                _play_nested_loop(_ni)
+                _play_nested_loop(_ni, parent_folder_num=_ni.get('_parent_folder_num'))
             return
         _naf = _pick_af_al(nested_items_list[0].get('nested_root_af', []), rng)
         _nal = _pick_af_al(nested_items_list[0].get('nested_root_al', []), rng)
@@ -8809,6 +8829,7 @@ class ManualHistoryTracker:
                                 _picked_nested.append({
                                     '_nested': True,
                                     '_random_single': True,
+                                    '_parent_folder_num': folder_num,  # manifest uses parent F-number
                                     'combo': [(_sn, [_f])],
                                     'nested_sf': _nsf,
                                     'nested_root_af': folder_data.get('nested_root_always_first'),
