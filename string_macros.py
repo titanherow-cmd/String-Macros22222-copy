@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.54
+  Current version: v3.19.55
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,22 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.55: (random) folders: all timing overhead removed, cursor 2-2.5x faster.
+            Previously is_click_sensitive suppressed jitter/idle/mid-pause
+            but intra-file pause (Step 3), pre-file pause (500-800ms),
+            and post-snap gap (80-150ms) still ran between each file.
+            Changes:
+            - Step 3 (intra-file pause) now forced to 0% for all
+              click_sensitive folders (file_type='raw'), both copies.
+            - slot_is_random param added to add_file_to_cycle (both copies).
+            - Pre-file pause skipped entirely when slot_is_random=True.
+            - Cursor transition speed divided by rng.uniform(2.0,2.5)
+              for slot_is_random — mouse moves 2-2.5x faster to next pos.
+            - Post-snap gap skipped for slot_is_random.
+            - slot_is_random=True passed from _play_nested_loop for all
+              _random_single items (both copies).
+            Net result: (random) files play with only cursor movement
+            between them, at 2-2.5x normal transition speed.
 - v3.19.54: (random) folders are now implicitly click_sensitive.
             No pauses, jitter, idle movements, intra-file pauses or any
             other timing/anti-detection features apply to files inside
@@ -1293,7 +1309,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.54"
+VERSION = "v3.19.55"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -2472,7 +2488,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
     """
     
     def add_file_to_cycle(file_path, folder_num, is_dmwm, file_label,
-                          slot_is_click_sensitive=False):
+                          slot_is_click_sensitive=False, slot_is_random=False):
         """Helper to add a file to the cycle.
         slot_is_click_sensitive: suppresses cursor transition TO this file.
         The whole-cycle flag (is_click_sensitive) controls apply_cycle_features.
@@ -2793,15 +2809,14 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # Normalize timing — use pre-filter base so leading gaps are preserved
         base_time = base_time_pre_filter
         
-        # PRE-FILE PAUSE: 0.8 seconds BEFORE file plays (FLAT, NO multiplier)
-        # This prevents drag issues when previous file ended with a click!
+        # PRE-FILE PAUSE: random gap before file plays so click has time to release.
+        # (random) slots: skip entirely — files play back-to-back with only cursor move.
         if cycle_events:
-            # Random pause scaled by mult: base 500-800ms × mult
-            pre_file_pause = rng.uniform(500.0, 800.0) * mult
-            timeline += pre_file_pause
-
-            # Track this pause
-            total_pre_pause += pre_file_pause
+            if not slot_is_random:
+                # Normal/click-sensitive: 500-800ms × mult pre-file pause
+                pre_file_pause = rng.uniform(500.0, 800.0) * mult
+                timeline += pre_file_pause
+                total_pre_pause += pre_file_pause
             
             # NOW do cursor transition (AFTER pause, so click has time to release)
             # Get last position from previous file
@@ -2822,8 +2837,14 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
             # CURSOR TRANSITION: runs for all folders including click-sensitive.
             # slot_is_click_sensitive: transition TO this specific subfolder is suppressed.
             # is_click_sensitive: only suppresses jitter + idle (NOT transition).
+            # slot_is_random: uses 2.0-2.5x faster transition; no post-snap gap.
             if not slot_is_click_sensitive:
-                transition_duration = rng.uniform(200.0, 400.0) * mult
+                if slot_is_random:
+                    # (random) folders: 2.0-2.5x faster cursor movement, no post-snap gap
+                    _speed_mult = rng.uniform(2.0, 2.5)
+                    transition_duration = rng.uniform(200.0, 400.0) * mult / _speed_mult
+                else:
+                    transition_duration = rng.uniform(200.0, 400.0) * mult
                 if last_x is not None and first_x is not None and (last_x != first_x or last_y != first_y):
                     transition_path = generate_human_path(
                         last_x, last_y, first_x, first_y,
@@ -2845,10 +2866,11 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                         'X': first_x,
                         'Y': first_y
                     })
-                    # POST-SNAP GAP
-                    post_snap_gap = int(rng.uniform(80, 150))
-                    timeline += post_snap_gap
-                    total_snap_gap_time += post_snap_gap
+                    if not slot_is_random:
+                        # POST-SNAP GAP: normal folders only
+                        post_snap_gap = int(rng.uniform(80, 150))
+                        timeline += post_snap_gap
+                        total_snap_gap_time += post_snap_gap
         
         # Add events from current file
         for event in events:
@@ -2933,7 +2955,8 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     _play_nested_loop(_fp)
                 else:
                     _is_dmwm = _fp in dmwm_file_set
-                    add_file_to_cycle(_fp, _manifest_fn, _is_dmwm, _fp.name)
+                    add_file_to_cycle(_fp, _manifest_fn, _is_dmwm, _fp.name,
+                                      slot_is_random=_is_random_single)
             if _sal:
                 _is_dmwm = _sal in dmwm_file_set
                 add_file_to_cycle(_sal, _manifest_fn, _is_dmwm, f"[ALWAYS LAST] {_sal.name}")
@@ -3599,7 +3622,11 @@ def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
 
     # Step 3: Within-file pause (percentage-based, range chosen per call)
     #   Raw: 0%   Normal: 2-5%   Inefficient: 10-15%
-    file_type = 'raw' if is_raw else ('inef' if is_inef else 'normal')
+    #   Click-sensitive (incl. (random)): forced to 0% — treat as raw
+    if is_click_sensitive:
+        file_type = 'raw'
+    else:
+        file_type = 'raw' if is_raw else ('inef' if is_inef else 'normal')
     events_with_pauses, pause_time, _intra_pivot_t = insert_intra_file_pauses(
         events_with_jitter, rng, protected_ranges, file_type=file_type
     )
@@ -5310,7 +5337,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.54"
+VERSION = "v3.19.55"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -7105,7 +7132,7 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
     """
     
     def add_file_to_cycle(file_path, folder_num, is_dmwm, file_label,
-                          slot_is_click_sensitive=False):
+                          slot_is_click_sensitive=False, slot_is_random=False):
         """Helper to add a file to the cycle.
         slot_is_click_sensitive: suppresses cursor transition TO this file.
         The whole-cycle flag (is_click_sensitive) controls apply_cycle_features.
@@ -7426,15 +7453,14 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
         # Normalize timing — use pre-filter base so leading gaps are preserved
         base_time = base_time_pre_filter
         
-        # PRE-FILE PAUSE: 0.8 seconds BEFORE file plays (FLAT, NO multiplier)
-        # This prevents drag issues when previous file ended with a click!
+        # PRE-FILE PAUSE: random gap before file plays so click has time to release.
+        # (random) slots: skip entirely — files play back-to-back with only cursor move.
         if cycle_events:
-            # Random pause scaled by mult: base 500-800ms × mult
-            pre_file_pause = rng.uniform(500.0, 800.0) * mult
-            timeline += pre_file_pause
-
-            # Track this pause
-            total_pre_pause += pre_file_pause
+            if not slot_is_random:
+                # Normal/click-sensitive: 500-800ms × mult pre-file pause
+                pre_file_pause = rng.uniform(500.0, 800.0) * mult
+                timeline += pre_file_pause
+                total_pre_pause += pre_file_pause
             
             # NOW do cursor transition (AFTER pause, so click has time to release)
             # Get last position from previous file
@@ -7455,8 +7481,14 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
             # CURSOR TRANSITION: runs for all folders including click-sensitive.
             # slot_is_click_sensitive: transition TO this specific subfolder is suppressed.
             # is_click_sensitive: only suppresses jitter + idle (NOT transition).
+            # slot_is_random: uses 2.0-2.5x faster transition; no post-snap gap.
             if not slot_is_click_sensitive:
-                transition_duration = rng.uniform(200.0, 400.0) * mult
+                if slot_is_random:
+                    # (random) folders: 2.0-2.5x faster cursor movement, no post-snap gap
+                    _speed_mult = rng.uniform(2.0, 2.5)
+                    transition_duration = rng.uniform(200.0, 400.0) * mult / _speed_mult
+                else:
+                    transition_duration = rng.uniform(200.0, 400.0) * mult
                 if last_x is not None and first_x is not None and (last_x != first_x or last_y != first_y):
                     transition_path = generate_human_path(
                         last_x, last_y, first_x, first_y,
@@ -7478,10 +7510,11 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                         'X': first_x,
                         'Y': first_y
                     })
-                    # POST-SNAP GAP
-                    post_snap_gap = int(rng.uniform(80, 150))
-                    timeline += post_snap_gap
-                    total_snap_gap_time += post_snap_gap
+                    if not slot_is_random:
+                        # POST-SNAP GAP: normal folders only
+                        post_snap_gap = int(rng.uniform(80, 150))
+                        timeline += post_snap_gap
+                        total_snap_gap_time += post_snap_gap
         
         # Add events from current file
         for event in events:
@@ -7566,7 +7599,8 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                     _play_nested_loop(_fp)
                 else:
                     _is_dmwm = _fp in dmwm_file_set
-                    add_file_to_cycle(_fp, _manifest_fn, _is_dmwm, _fp.name)
+                    add_file_to_cycle(_fp, _manifest_fn, _is_dmwm, _fp.name,
+                                      slot_is_random=_is_random_single)
             if _sal:
                 _is_dmwm = _sal in dmwm_file_set
                 add_file_to_cycle(_sal, _manifest_fn, _is_dmwm, f"[ALWAYS LAST] {_sal.name}")
@@ -8232,7 +8266,11 @@ def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
 
     # Step 3: Within-file pause (percentage-based, range chosen per call)
     #   Raw: 0%   Normal: 2-5%   Inefficient: 10-15%
-    file_type = 'raw' if is_raw else ('inef' if is_inef else 'normal')
+    #   Click-sensitive (incl. (random)): forced to 0% — treat as raw
+    if is_click_sensitive:
+        file_type = 'raw'
+    else:
+        file_type = 'raw' if is_raw else ('inef' if is_inef else 'normal')
     events_with_pauses, pause_time, _intra_pivot_t = insert_intra_file_pauses(
         events_with_jitter, rng, protected_ranges, file_type=file_type
     )
