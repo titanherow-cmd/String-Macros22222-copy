@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.53
+  Current version: v3.19.54
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,13 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.54: (random) folders are now implicitly click_sensitive.
+            No pauses, jitter, idle movements, intra-file pauses or any
+            other timing/anti-detection features apply to files inside
+            (random) tagged folders. Only cursor movement between files
+            is retained. is_click_sensitive forced True whenever
+            is_random is True in scan_for_numbered_subfolders.
+            Applied to both copies.
 - v3.19.53: (random) manifest now shows parent F-number not sub-number.
             Previously files from sub-subfolders (1/, 2/, drop sword (1)/)
             were logged as F1-, F2- etc in the manifest. Now they all show
@@ -1286,7 +1293,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.53"
+VERSION = "v3.19.54"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -3790,6 +3797,10 @@ def scan_for_numbered_subfolders(base_path):
             _random_match = re.search(r'\(random(\d*)\)', item.name, re.IGNORECASE)
             is_random = bool(_random_match)
             random_max = int(_random_match.group(1)) if (is_random and _random_match.group(1)) else None
+            # (random) folders are implicitly click-sensitive: no pauses, jitter,
+            # idle movements or other timing features — only cursor movement between files.
+            if is_random:
+                is_click_sensitive = True
 
             # Detect nested numbered subfolders (e.g. F5 that has its own F1/F2/F3 inside)
             # Accepts: leading digit/F-prefix OR bracketed number anywhere in name e.g. '(1)'
@@ -5299,7 +5310,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.53"
+VERSION = "v3.19.54"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -8419,6 +8430,10 @@ def scan_for_numbered_subfolders(base_path):
             _random_match = re.search(r'\(random(\d*)\)', item.name, re.IGNORECASE)
             is_random = bool(_random_match)
             random_max = int(_random_match.group(1)) if (is_random and _random_match.group(1)) else None
+            # (random) folders are implicitly click-sensitive: no pauses, jitter,
+            # idle movements or other timing features — only cursor movement between files.
+            if is_random:
+                is_click_sensitive = True
 
             # Detect nested numbered subfolders (e.g. F5 that has its own F1/F2/F3 inside)
             # Accepts: leading digit/F-prefix OR bracketed number anywhere in name e.g. '(1)'
