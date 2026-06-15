@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.55
+  Current version: v3.19.56
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,20 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.56: (random) files: idle gaps stripped + cursor 2.5-3.5x faster.
+            ROOT CAUSE: within-file idle gaps (cursor parked 500-1755ms
+            before clicks) and slow recorded movement (avg 230px/s) made
+            (random) sequences feel sluggish even with between-file
+            overhead removed.
+            FIX: new event placement path for slot_is_random=True:
+            1. _RANDOM_MAX_GAP_MS=120ms — any inter-event gap in the
+               original recording exceeding 120ms is clamped to 120ms,
+               stripping parked-cursor idle periods.
+            2. _RANDOM_SPEED_MULT=rng.uniform(2.5,3.5) — all inter-event
+               intervals divided by this factor, compressing movement to
+               ~575-800px/s (focused fast player feel).
+            Both applied per-event on the original timestamps before
+            placement onto the timeline. Applied to both copies.
 - v3.19.55: (random) folders: all timing overhead removed, cursor 2-2.5x faster.
             Previously is_click_sensitive suppressed jitter/idle/mid-pause
             but intra-file pause (Step 3), pre-file pause (500-800ms),
@@ -1309,7 +1323,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.55"
+VERSION = "v3.19.56"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -2873,10 +2887,28 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                         total_snap_gap_time += post_snap_gap
         
         # Add events from current file
-        for event in events:
-            new_event = {**event}
-            new_event['Time'] = event['Time'] - base_time + timeline
-            cycle_events.append(new_event)
+        if slot_is_random:
+            # (random) folders: compress idle gaps and speed up cursor movement.
+            # 1. Cap any inter-event gap to _RANDOM_MAX_GAP_MS (strips parked-cursor pauses).
+            # 2. Divide all inter-event intervals by _RANDOM_SPEED_MULT (faster movement).
+            _RANDOM_MAX_GAP_MS  = 120.0   # idle gaps clamped to this
+            _RANDOM_SPEED_MULT  = rng.uniform(2.5, 3.5)  # movement speed multiplier
+            _r_cursor_t = timeline  # running cursor time for (random) placement
+            _prev_orig_t = base_time  # previous event's original time
+            for event in events:
+                new_event = {**event}
+                _orig_gap = event['Time'] - _prev_orig_t  # gap in original recording
+                _clamped  = min(_orig_gap, _RANDOM_MAX_GAP_MS)  # cap idle gaps
+                _scaled   = _clamped / _RANDOM_SPEED_MULT       # speed up
+                _r_cursor_t += _scaled
+                new_event['Time'] = _r_cursor_t
+                cycle_events.append(new_event)
+                _prev_orig_t = event['Time']
+        else:
+            for event in events:
+                new_event = {**event}
+                new_event['Time'] = event['Time'] - base_time + timeline
+                cycle_events.append(new_event)
         
         # Update timeline and track THIS file's end time
         if cycle_events:
@@ -5337,7 +5369,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.55"
+VERSION = "v3.19.56"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -7517,10 +7549,28 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                         total_snap_gap_time += post_snap_gap
         
         # Add events from current file
-        for event in events:
-            new_event = {**event}
-            new_event['Time'] = event['Time'] - base_time + timeline
-            cycle_events.append(new_event)
+        if slot_is_random:
+            # (random) folders: compress idle gaps and speed up cursor movement.
+            # 1. Cap any inter-event gap to _RANDOM_MAX_GAP_MS (strips parked-cursor pauses).
+            # 2. Divide all inter-event intervals by _RANDOM_SPEED_MULT (faster movement).
+            _RANDOM_MAX_GAP_MS  = 120.0   # idle gaps clamped to this
+            _RANDOM_SPEED_MULT  = rng.uniform(2.5, 3.5)  # movement speed multiplier
+            _r_cursor_t = timeline  # running cursor time for (random) placement
+            _prev_orig_t = base_time  # previous event's original time
+            for event in events:
+                new_event = {**event}
+                _orig_gap = event['Time'] - _prev_orig_t  # gap in original recording
+                _clamped  = min(_orig_gap, _RANDOM_MAX_GAP_MS)  # cap idle gaps
+                _scaled   = _clamped / _RANDOM_SPEED_MULT       # speed up
+                _r_cursor_t += _scaled
+                new_event['Time'] = _r_cursor_t
+                cycle_events.append(new_event)
+                _prev_orig_t = event['Time']
+        else:
+            for event in events:
+                new_event = {**event}
+                new_event['Time'] = event['Time'] - base_time + timeline
+                cycle_events.append(new_event)
         
         # Update timeline and track THIS file's end time
         if cycle_events:
