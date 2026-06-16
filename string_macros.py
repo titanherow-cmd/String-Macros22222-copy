@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.56
+  Current version: v3.19.58
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,22 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.58: Fixed duplicate group folder runs overwriting each other.
+            ROOT CAUSE: when a group folder (e.g. 6- Smithing files) was
+            selected 3x in the dropdowns, _run_suffix (" (2)", " (3)")
+            was correctly set on each child folder_data but never applied
+            in the _group_name branch — all three runs wrote to the same
+            (543) 6- Smithing files/ wrapper, overwriting each other.
+            FIX: _run_suffix now appended to the WRAPPER folder name:
+              run 1: (543) 6- Smithing files/60- Only Smth R2H/
+              run 2: (543) 6- Smithing files (2)/60- Only Smth R2H/
+              run 3: (543) 6- Smithing files (3)/60- Only Smth R2H/
+            Applied to both copies.
+- v3.19.57: Bundle ID appended to strung output filenames.
+            Format: 69_T_155m33s_(543).json
+            Was:    69_T_155m33s.json
+            Makes it easy to identify which batch a file came from
+            when mixing files from different runs.
 - v3.19.56: (random) files: idle gaps stripped + cursor 2.5-3.5x faster.
             ROOT CAUSE: within-file idle gaps (cursor parked 500-1755ms
             before clicks) and slow recorded movement (avg 230px/s) made
@@ -1323,7 +1339,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.56"
+VERSION = "v3.19.58"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -5069,15 +5085,16 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
+        _run_suffix = folder_data.get('_run_suffix', '')
         if _group_name:
             # Group child: always wrap inside (bundle_id) skill_name/ subfolder
-            _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
+            # _run_suffix appended to child folder name so duplicate runs get distinct dirs
+            _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}{_run_suffix}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
             print(f"  [group] _group_name={_group_name!r} → {out_folder.relative_to(bundle_dir)}")
         elif args.specific_folders:
             # Specific-folders mode, non-group: batch prefix on the subfolder name itself
-            _run_suffix = folder_data.get('_run_suffix', '')
             output_folder_name = f"({args.bundle_id}) {output_folder_name}{_run_suffix}"
             out_folder = bundle_dir / output_folder_name
         else:
@@ -5369,7 +5386,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.56"
+VERSION = "v3.19.58"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -9731,15 +9748,16 @@ def main():
         # multiple times via the dropdowns, giving each run a distinct output name.
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
+        _run_suffix = folder_data.get('_run_suffix', '')
         if _group_name:
             # Group child: always wrap inside (bundle_id) skill_name/ subfolder
-            _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}"
+            # _run_suffix appended to child folder name so duplicate runs get distinct dirs
+            _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}{_run_suffix}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
             print(f"  [group] _group_name={_group_name!r} → {out_folder.relative_to(bundle_dir)}")
         elif args.specific_folders:
             # Specific-folders mode, non-group: batch prefix on the subfolder name itself
-            _run_suffix = folder_data.get('_run_suffix', '')
             output_folder_name = f"({args.bundle_id}) {output_folder_name}{_run_suffix}"
             out_folder = bundle_dir / output_folder_name
         else:
@@ -10441,7 +10459,7 @@ def main():
                 prefix = ""
             
             v_code = f"{folder_number}_{v_letter}"
-            fname = f"{prefix}{v_code}_{total_min}m{total_sec}s.json"
+            fname = f"{prefix}{v_code}_{total_min}m{total_sec}s_({args.bundle_id}).json"
             
             # CRITICAL FIXES before saving:
             # 1. Convert Click events to LeftDown+LeftUp pairs (prevents clamp)
