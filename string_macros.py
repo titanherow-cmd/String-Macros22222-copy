@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.58
+  Current version: v3.19.59
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,18 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.59: Fixed wrong-tile clicks in (random) compressed files.
+            ROOT CAUSE: v3.19.56 event compression clamped ALL gaps to
+            120ms then divided by 2.5-3.5x. The gap before a DragStart/
+            LeftDown/Click was compressed to as little as 5ms — the cursor
+            was still mid-approach when the click fired, registering on
+            the wrong tile rather than the hover target.
+            FIX: _RANDOM_MIN_PRECLICK_MS = 38ms floor applied to the
+            scaled gap immediately before any click-type event. Normal
+            idle gaps still get clamped+compressed; only the final
+            pre-click gap is guaranteed ≥38ms so the cursor has settled.
+            Matches Part A's _ZERO_GAP_TARGET threshold (35ms + margin).
+            Applied to both copies.
 - v3.19.58: Fixed duplicate group folder runs overwriting each other.
             ROOT CAUSE: when a group folder (e.g. 6- Smithing files) was
             selected 3x in the dropdowns, _run_suffix (" (2)", " (3)")
@@ -1339,7 +1351,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.58"
+VERSION = "v3.19.59"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -2907,8 +2919,14 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
             # (random) folders: compress idle gaps and speed up cursor movement.
             # 1. Cap any inter-event gap to _RANDOM_MAX_GAP_MS (strips parked-cursor pauses).
             # 2. Divide all inter-event intervals by _RANDOM_SPEED_MULT (faster movement).
-            _RANDOM_MAX_GAP_MS  = 120.0   # idle gaps clamped to this
-            _RANDOM_SPEED_MULT  = rng.uniform(2.5, 3.5)  # movement speed multiplier
+            # 3. EXCEPTION: the gap immediately before any click event (DragStart/LeftDown/
+            #    Click/RightDown) is never compressed below _RANDOM_MIN_PRECLICK_MS.
+            #    This ensures the cursor has fully settled at the target pixel before
+            #    the click fires — prevents wrong-tile clicks from compressed approach.
+            _RANDOM_MAX_GAP_MS     = 120.0   # idle gaps clamped to this
+            _RANDOM_SPEED_MULT     = rng.uniform(2.5, 3.5)  # movement speed multiplier
+            _RANDOM_MIN_PRECLICK_MS = 38.0   # minimum gap before any click event
+            _CLICK_TYPES_R = {'DragStart', 'LeftDown', 'RightDown', 'Click'}
             _r_cursor_t = timeline  # running cursor time for (random) placement
             _prev_orig_t = base_time  # previous event's original time
             for event in events:
@@ -2916,6 +2934,9 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                 _orig_gap = event['Time'] - _prev_orig_t  # gap in original recording
                 _clamped  = min(_orig_gap, _RANDOM_MAX_GAP_MS)  # cap idle gaps
                 _scaled   = _clamped / _RANDOM_SPEED_MULT       # speed up
+                # Protect pre-click gap: ensure cursor has settled before click fires
+                if event.get('Type') in _CLICK_TYPES_R:
+                    _scaled = max(_scaled, _RANDOM_MIN_PRECLICK_MS)
                 _r_cursor_t += _scaled
                 new_event['Time'] = _r_cursor_t
                 cycle_events.append(new_event)
@@ -5386,7 +5407,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.58"
+VERSION = "v3.19.59"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -7570,8 +7591,14 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
             # (random) folders: compress idle gaps and speed up cursor movement.
             # 1. Cap any inter-event gap to _RANDOM_MAX_GAP_MS (strips parked-cursor pauses).
             # 2. Divide all inter-event intervals by _RANDOM_SPEED_MULT (faster movement).
-            _RANDOM_MAX_GAP_MS  = 120.0   # idle gaps clamped to this
-            _RANDOM_SPEED_MULT  = rng.uniform(2.5, 3.5)  # movement speed multiplier
+            # 3. EXCEPTION: the gap immediately before any click event (DragStart/LeftDown/
+            #    Click/RightDown) is never compressed below _RANDOM_MIN_PRECLICK_MS.
+            #    This ensures the cursor has fully settled at the target pixel before
+            #    the click fires — prevents wrong-tile clicks from compressed approach.
+            _RANDOM_MAX_GAP_MS     = 120.0   # idle gaps clamped to this
+            _RANDOM_SPEED_MULT     = rng.uniform(2.5, 3.5)  # movement speed multiplier
+            _RANDOM_MIN_PRECLICK_MS = 38.0   # minimum gap before any click event
+            _CLICK_TYPES_R = {'DragStart', 'LeftDown', 'RightDown', 'Click'}
             _r_cursor_t = timeline  # running cursor time for (random) placement
             _prev_orig_t = base_time  # previous event's original time
             for event in events:
@@ -7579,6 +7606,9 @@ def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
                 _orig_gap = event['Time'] - _prev_orig_t  # gap in original recording
                 _clamped  = min(_orig_gap, _RANDOM_MAX_GAP_MS)  # cap idle gaps
                 _scaled   = _clamped / _RANDOM_SPEED_MULT       # speed up
+                # Protect pre-click gap: ensure cursor has settled before click fires
+                if event.get('Type') in _CLICK_TYPES_R:
+                    _scaled = max(_scaled, _RANDOM_MIN_PRECLICK_MS)
                 _r_cursor_t += _scaled
                 new_event['Time'] = _r_cursor_t
                 cycle_events.append(new_event)
