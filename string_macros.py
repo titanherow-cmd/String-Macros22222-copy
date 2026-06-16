@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.59
+  Current version: v3.19.61
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,29 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.61: Fixed wrong-tile clicks from idle mouse movements.
+            ROOT CAUSE: insert_idle_mouse_movements click_types set was
+            {"Click","LeftDown","LeftUp","RightDown","RightUp"} — missing
+            DragStart and DragEnd. The 3000ms click_proximity exclusion
+            zone was never built around DragStart events. Any gap >2000ms
+            before a DragStart was eligible for idle movement insertion.
+            The idle movement wandered the cursor away and attempted to
+            return to next_x/next_y (the next MM after the gap), but the
+            DragStart firing during or just after the transition could
+            register on the wrong tile if the cursor hadn't fully settled.
+            FIX: DragStart and DragEnd added to click_types in both copies
+            of insert_idle_mouse_movements. 3000ms exclusion zone now
+            correctly surrounds all drag click events.
+- v3.19.60: Duplicate folder runs get dot-suffixed bundle IDs.
+            When the same folder is selected 2 or 3 times in the UI:
+              Run 1: (555) 6- Smithing files/  files: 69_T_...(555).json
+              Run 2: (555.1) 6- Smithing files/ files: 69_T_...(555.1).json
+              Run 3: (555.2) 6- Smithing files/ files: 69_T_...(555.2).json
+            _effective_bid computed per folder_data entry: str(bundle_id)
+            for run 1, f"{bundle_id}.{run-1}" for subsequent runs.
+            Replaces the old " (2)", " (3)" suffix on folder names.
+            Output folder, wrapper (skill group) folder, and strung
+            filename all use _effective_bid. Applied to both copies.
 - v3.19.59: Fixed wrong-tile clicks in (random) compressed files.
             ROOT CAUSE: v3.19.56 event compression clamped ALL gaps to
             120ms then divided by 2.5-3.5x. The gap before a DragStart/
@@ -1351,7 +1374,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.59"
+VERSION = "v3.19.61"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -2122,7 +2145,7 @@ def insert_idle_mouse_movements(events, rng, movement_percentage,
     # (idle movements must not be placed in those windows)
     click_proximity = set()
     click_window = 3000
-    click_types = {"Click", "LeftDown", "LeftUp", "RightDown", "RightUp"}
+    click_types = {"Click", "LeftDown", "LeftUp", "RightDown", "RightUp", "DragStart", "DragEnd"}
     for i, e in enumerate(events):
         if e.get("Type") in click_types:
             t_click = e.get("Time", 0)
@@ -4923,15 +4946,14 @@ def main():
                     if _req_name in _group_registry:
                         _name_run_count[_req_name] = _name_run_count.get(_req_name, 0) + 1
                         _grun = _name_run_count[_req_name]
-                        _gsufx = f" (run {_grun})" if _grun > 1 else ""
+                        # Effective bundle id: 555 for run 1, 555.1 for run 2, 555.2 for run 3
+                        _g_ebid = str(args.bundle_id) if _grun == 1 else f"{args.bundle_id}.{_grun - 1}"
+                        _gsufx = f" (run {_grun}, bid={_g_ebid})" if _grun > 1 else ""
                         print(f"  [group] '{_req_name}' → {len(_group_registry[_req_name])} child folder(s){_gsufx}")
                         for _gchild in _group_registry[_req_name]:
                             _gfd = dict(_gchild)
-                            _ck = _gfd['name'].lower()
-                            _name_run_count[_ck] = _name_run_count.get(_ck, 0) + 1
-                            _gfd['_run_suffix'] = (
-                                f" ({_name_run_count[_ck]})" if _name_run_count[_ck] > 1 else ""
-                            )
+                            _gfd['_run_suffix'] = ''  # no suffix on folder name — bid carries the distinction
+                            _gfd['_effective_bid'] = _g_ebid
                             filtered_folders.append(_gfd)
                         continue
 
@@ -4944,9 +4966,11 @@ def main():
                     if _matched_fd is None:
                         continue  # not found as top-level; caught by subfolder fallback
 
-                    # Assign run suffix for duplicates
+                    # Assign effective bundle id for duplicates: 555, 555.1, 555.2
                     _name_run_count[_req_name] = _name_run_count.get(_req_name, 0) + 1
-                    _rsuffix = f" ({_name_run_count[_req_name]})" if _name_run_count[_req_name] > 1 else ""
+                    _nrun = _name_run_count[_req_name]
+                    _rsuffix = ''  # no longer used for naming — _effective_bid carries distinction
+                    _effective_bid = str(args.bundle_id) if _nrun == 1 else f"{args.bundle_id}.{_nrun - 1}"
 
                     if _sf_filter:
                         original_subs = _matched_fd['subfolders']
@@ -4966,12 +4990,14 @@ def main():
                         filtered_fd = dict(_matched_fd)
                         filtered_fd['subfolders'] = filtered_subs
                         filtered_fd['_run_suffix'] = _rsuffix
+                        filtered_fd['_effective_bid'] = _effective_bid
                         filtered_folders.append(filtered_fd)
                     else:
                         # Shallow-copy folder_data so each duplicate run has its own
-                        # _run_suffix without sharing it with other runs of the same folder.
+                        # _effective_bid without sharing it with other runs of the same folder.
                         filtered_fd = dict(_matched_fd)
                         filtered_fd['_run_suffix'] = _rsuffix
+                        filtered_fd['_effective_bid'] = _effective_bid
                         filtered_folders.append(filtered_fd)
 
                 if not filtered_folders:
@@ -5107,16 +5133,18 @@ def main():
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
         _run_suffix = folder_data.get('_run_suffix', '')
+        # _effective_bid: 555 for run 1, 555.1 for run 2, 555.2 for run 3
+        # Makes it easy to identify which repeat of a folder a file belongs to.
+        _effective_bid = folder_data.get('_effective_bid', str(args.bundle_id))
         if _group_name:
-            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
-            # _run_suffix appended to child folder name so duplicate runs get distinct dirs
-            _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}{_run_suffix}"
+            # Group child: always wrap inside (effective_bid) skill_name/ subfolder
+            _skill_out = bundle_dir / f"({_effective_bid}) {_group_name}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
             print(f"  [group] _group_name={_group_name!r} → {out_folder.relative_to(bundle_dir)}")
         elif args.specific_folders:
             # Specific-folders mode, non-group: batch prefix on the subfolder name itself
-            output_folder_name = f"({args.bundle_id}) {output_folder_name}{_run_suffix}"
+            output_folder_name = f"({_effective_bid}) {output_folder_name}{_run_suffix}"
             out_folder = bundle_dir / output_folder_name
         else:
             # ALL FOLDERS mode, standalone folder: flat, no batch prefix
@@ -5407,7 +5435,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.59"
+VERSION = "v3.19.61"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -6803,7 +6831,7 @@ def insert_idle_mouse_movements(events, rng, movement_percentage,
     # (idle movements must not be placed in those windows)
     click_proximity = set()
     click_window = 3000
-    click_types = {"Click", "LeftDown", "LeftUp", "RightDown", "RightUp"}
+    click_types = {"Click", "LeftDown", "LeftUp", "RightDown", "RightUp", "DragStart", "DragEnd"}
     for i, e in enumerate(events):
         if e.get("Type") in click_types:
             t_click = e.get("Time", 0)
@@ -9595,15 +9623,14 @@ def main():
                     if _req_name in _group_registry:
                         _name_run_count[_req_name] = _name_run_count.get(_req_name, 0) + 1
                         _grun = _name_run_count[_req_name]
-                        _gsufx = f" (run {_grun})" if _grun > 1 else ""
+                        # Effective bundle id: 555 for run 1, 555.1 for run 2, 555.2 for run 3
+                        _g_ebid = str(args.bundle_id) if _grun == 1 else f"{args.bundle_id}.{_grun - 1}"
+                        _gsufx = f" (run {_grun}, bid={_g_ebid})" if _grun > 1 else ""
                         print(f"  [group] '{_req_name}' → {len(_group_registry[_req_name])} child folder(s){_gsufx}")
                         for _gchild in _group_registry[_req_name]:
                             _gfd = dict(_gchild)
-                            _ck = _gfd['name'].lower()
-                            _name_run_count[_ck] = _name_run_count.get(_ck, 0) + 1
-                            _gfd['_run_suffix'] = (
-                                f" ({_name_run_count[_ck]})" if _name_run_count[_ck] > 1 else ""
-                            )
+                            _gfd['_run_suffix'] = ''  # no suffix on folder name — bid carries the distinction
+                            _gfd['_effective_bid'] = _g_ebid
                             filtered_folders.append(_gfd)
                         continue
 
@@ -9616,9 +9643,11 @@ def main():
                     if _matched_fd is None:
                         continue  # not found as top-level; caught by subfolder fallback
 
-                    # Assign run suffix for duplicates
+                    # Assign effective bundle id for duplicates: 555, 555.1, 555.2
                     _name_run_count[_req_name] = _name_run_count.get(_req_name, 0) + 1
-                    _rsuffix = f" ({_name_run_count[_req_name]})" if _name_run_count[_req_name] > 1 else ""
+                    _nrun = _name_run_count[_req_name]
+                    _rsuffix = ''  # no longer used for naming — _effective_bid carries distinction
+                    _effective_bid = str(args.bundle_id) if _nrun == 1 else f"{args.bundle_id}.{_nrun - 1}"
 
                     if _sf_filter:
                         original_subs = _matched_fd['subfolders']
@@ -9638,12 +9667,14 @@ def main():
                         filtered_fd = dict(_matched_fd)
                         filtered_fd['subfolders'] = filtered_subs
                         filtered_fd['_run_suffix'] = _rsuffix
+                        filtered_fd['_effective_bid'] = _effective_bid
                         filtered_folders.append(filtered_fd)
                     else:
                         # Shallow-copy folder_data so each duplicate run has its own
-                        # _run_suffix without sharing it with other runs of the same folder.
+                        # _effective_bid without sharing it with other runs of the same folder.
                         filtered_fd = dict(_matched_fd)
                         filtered_fd['_run_suffix'] = _rsuffix
+                        filtered_fd['_effective_bid'] = _effective_bid
                         filtered_folders.append(filtered_fd)
 
                 if not filtered_folders:
@@ -9779,16 +9810,18 @@ def main():
         output_folder_name = cleaned_folder_name
         _group_name = folder_data.get('_group_name')  # set for group children in ALL FOLDERS and specific-folders mode
         _run_suffix = folder_data.get('_run_suffix', '')
+        # _effective_bid: 555 for run 1, 555.1 for run 2, 555.2 for run 3
+        # Makes it easy to identify which repeat of a folder a file belongs to.
+        _effective_bid = folder_data.get('_effective_bid', str(args.bundle_id))
         if _group_name:
-            # Group child: always wrap inside (bundle_id) skill_name/ subfolder
-            # _run_suffix appended to child folder name so duplicate runs get distinct dirs
-            _skill_out = bundle_dir / f"({args.bundle_id}) {_group_name}{_run_suffix}"
+            # Group child: always wrap inside (effective_bid) skill_name/ subfolder
+            _skill_out = bundle_dir / f"({_effective_bid}) {_group_name}"
             _skill_out.mkdir(parents=True, exist_ok=True)
             out_folder = _skill_out / output_folder_name
             print(f"  [group] _group_name={_group_name!r} → {out_folder.relative_to(bundle_dir)}")
         elif args.specific_folders:
             # Specific-folders mode, non-group: batch prefix on the subfolder name itself
-            output_folder_name = f"({args.bundle_id}) {output_folder_name}{_run_suffix}"
+            output_folder_name = f"({_effective_bid}) {output_folder_name}{_run_suffix}"
             out_folder = bundle_dir / output_folder_name
         else:
             # ALL FOLDERS mode, standalone folder: flat, no batch prefix
@@ -10489,7 +10522,7 @@ def main():
                 prefix = ""
             
             v_code = f"{folder_number}_{v_letter}"
-            fname = f"{prefix}{v_code}_{total_min}m{total_sec}s_({args.bundle_id}).json"
+            fname = f"{prefix}{v_code}_{total_min}m{total_sec}s_({_effective_bid}).json"
             
             # CRITICAL FIXES before saving:
             # 1. Convert Click events to LeftDown+LeftUp pairs (prevents clamp)
