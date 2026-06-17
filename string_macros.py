@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.61
+  Current version: v3.19.62
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -392,6 +392,12 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.62: Duplicate folder run naming changed from 555/555.1/555.2
+            to 555.1/555.2/555.3. First run now also gets a dot suffix
+            instead of the plain bundle id, so the sequence is fully
+            consistent: f"{args.bundle_id}.{_grun}" / f"{args.bundle_id}.{_nrun}"
+            for run 1, 2, 3 respectively. Folder name, wrapper name, and
+            filename all updated accordingly. Applied to both copies.
 - v3.19.61: Fixed wrong-tile clicks from idle mouse movements.
             ROOT CAUSE: insert_idle_mouse_movements click_types set was
             {"Click","LeftDown","LeftUp","RightDown","RightUp"} — missing
@@ -1374,7 +1380,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.61"
+VERSION = "v3.19.62"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -4947,7 +4953,7 @@ def main():
                         _name_run_count[_req_name] = _name_run_count.get(_req_name, 0) + 1
                         _grun = _name_run_count[_req_name]
                         # Effective bundle id: 555 for run 1, 555.1 for run 2, 555.2 for run 3
-                        _g_ebid = str(args.bundle_id) if _grun == 1 else f"{args.bundle_id}.{_grun - 1}"
+                        _g_ebid = f"{args.bundle_id}.{_grun}"
                         _gsufx = f" (run {_grun}, bid={_g_ebid})" if _grun > 1 else ""
                         print(f"  [group] '{_req_name}' → {len(_group_registry[_req_name])} child folder(s){_gsufx}")
                         for _gchild in _group_registry[_req_name]:
@@ -4970,7 +4976,7 @@ def main():
                     _name_run_count[_req_name] = _name_run_count.get(_req_name, 0) + 1
                     _nrun = _name_run_count[_req_name]
                     _rsuffix = ''  # no longer used for naming — _effective_bid carries distinction
-                    _effective_bid = str(args.bundle_id) if _nrun == 1 else f"{args.bundle_id}.{_nrun - 1}"
+                    _effective_bid = f"{args.bundle_id}.{_nrun}"
 
                     if _sf_filter:
                         original_subs = _matched_fd['subfolders']
@@ -5435,7 +5441,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.61"
+VERSION = "v3.19.62"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -9624,7 +9630,7 @@ def main():
                         _name_run_count[_req_name] = _name_run_count.get(_req_name, 0) + 1
                         _grun = _name_run_count[_req_name]
                         # Effective bundle id: 555 for run 1, 555.1 for run 2, 555.2 for run 3
-                        _g_ebid = str(args.bundle_id) if _grun == 1 else f"{args.bundle_id}.{_grun - 1}"
+                        _g_ebid = f"{args.bundle_id}.{_grun}"
                         _gsufx = f" (run {_grun}, bid={_g_ebid})" if _grun > 1 else ""
                         print(f"  [group] '{_req_name}' → {len(_group_registry[_req_name])} child folder(s){_gsufx}")
                         for _gchild in _group_registry[_req_name]:
@@ -9647,7 +9653,7 @@ def main():
                     _name_run_count[_req_name] = _name_run_count.get(_req_name, 0) + 1
                     _nrun = _name_run_count[_req_name]
                     _rsuffix = ''  # no longer used for naming — _effective_bid carries distinction
-                    _effective_bid = str(args.bundle_id) if _nrun == 1 else f"{args.bundle_id}.{_nrun - 1}"
+                    _effective_bid = f"{args.bundle_id}.{_nrun}"
 
                     if _sf_filter:
                         original_subs = _matched_fd['subfolders']
