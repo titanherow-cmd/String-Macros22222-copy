@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.62
+  Current version: v3.19.63
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -338,6 +338,132 @@ STRING MACROS - FEATURE LIST
     Special folders (DISTRACTIONS, LOGOUT, combination_history) are never groups.
 
 ===========================================================================
+                    CRITICAL FEATURES — DO NOT BREAK
+===========================================================================
+The items below are load-bearing. If any of these are altered, removed,
+or have their order/threshold changed without re-verifying against the
+specific bug they were written to fix, strung files can come out with
+broken loop actions, misfired clicks, or misparsed input. Each entry
+names the exact mechanism, why it exists, and the version where it was
+introduced or last hardened. Before touching ANY of the functions named
+below, re-read the matching changelog entry for the full failure mode.
+
+1. DUAL-COPY RULE (applies to every item below)
+   The script contains two structurally identical copies of every function
+   (a legacy block and an active block). EVERY fix in this list MUST be
+   applied to BOTH copies or the bug reappears intermittently depending on
+   which code path executes. This is the single most common cause of
+   "the fix didn't work" reports — verify both copies after every edit.
+
+2. Part A — MouseMove -> click gap enforcement (_ZERO_GAP_THRESHOLD=35ms)
+   Function: filter_problematic_keys, both copies.
+   Why: a click firing <35ms after the preceding MouseMove can register
+   before the game client has processed the cursor position, causing a
+   misclick on the wrong tile. Part A shifts the click +settling-MM so the
+   cursor has time to land. v3.19.06, v3.19.18, v3.19.27 raised/tuned this
+   threshold after real misclick reports — do not lower it casually.
+
+3. Part B — DragEnd -> DragStart re-press gap (_DRAG_REPRESS_THRESHOLD=200ms)
+   Function: filter_problematic_keys, both copies.
+   Why: re-pressing too soon after releasing can be eaten by the client.
+   MUST be skipped for genuine rapid/double-clicks (see item 5) or it will
+   stretch intentional double-clicks into broken single clicks.
+
+4. Part F — long-gap settling MouseMove (_LONG_GAP_SETTLE_MS=1000ms)
+   Function: filter_problematic_keys, both copies.
+   Why: after a long idle gap, inserts a MM at the EXACT click coordinates
+   (no offset) just before the click fires, so the cursor visibly arrives
+   before clicking instead of teleporting. Settling MM must never use a
+   random offset — exact coords only, or the click can land off-target.
+
+5. detect_rapid_click_sequences + soft double-click pre-scan
+   Function: detect_rapid_click_sequences (apply_cycle_features) AND the
+   "Rapid pre-scan" block inside filter_problematic_keys. Both copies of
+   both. Pixel tolerance MUST stay at 20px (matches _RAPID_POS_TOL_SOFT) —
+   lowering it back to 10px reopens the gap where clicks 11-20px apart lose
+   protection from pause/jitter injection between them (fixed v3.19.43).
+   Any two clicks within 2000ms and 20px of each other are a "click cluster"
+   and every event between them is added to protected_set/_no_modify_set —
+   this protected_set MUST be respected by Part B, intra-file pause,
+   mid-event pause, and jitter, or genuine double/rapid clicks get stretched
+   or deflected (the original CBD(50) bug class, v3.19.43/v3.19.49).
+
+6. add_pre_click_jitter exclusion zone + convergence check
+   Function: add_pre_click_jitter, both copies.
+   - click_types for the 1000ms exclusion MUST include DragStart AND
+     DragEnd (v3.19.43) — DragEnd was missing originally, leaving a gap
+     where jitter could fire just after a release and before the next
+     action.
+   - The CONVERGENCE CHECK (v3.19.46, blind-spot fixed v3.19.49) excludes
+     any MouseMove that is closer to an upcoming click than the previous
+     MM was — i.e. part of an approach trajectory. Time-distance alone
+     (1000ms) is NOT sufficient: approaches can run 1-5+ seconds, and
+     without the convergence check jitter zigzags the cursor mid-approach,
+     causing it to land on the wrong tile when the click fires (the
+     FMFcraftdia bug, v3.19.46). _prev_mm_x/_prev_mm_y MUST be seeded from
+     the first click's position, not None — seeding with None disables the
+     check entirely for the first MouseMove in the file (v3.19.49).
+
+7. insert_idle_mouse_movements click_proximity exclusion (click_window=3000ms)
+   Function: insert_idle_mouse_movements, both copies.
+   click_types set MUST include DragStart and DragEnd alongside
+   Click/LeftDown/LeftUp/RightDown/RightUp (v3.19.61). Without DragStart/
+   DragEnd in this set, gaps >2000ms before a drag-click are eligible for
+   idle wandering, and the cursor may not have fully returned to position
+   when the click fires — wrong-tile click. This was the longest-standing
+   bug in the file; it predates all (random)-folder work and is unrelated
+   to it. If "cursor hovers, darts away, comes back late for the click"
+   resurfaces in a NORMAL (non-random) file, check this set first.
+
+8. (random) folder pre-click gap floor (_RANDOM_MIN_PRECLICK_MS=38ms)
+   Function: add_file_to_cycle event placement, slot_is_random branch,
+   both copies. The (random)-folder speed/idle-gap compression (v3.19.56)
+   divides ALL inter-event gaps by 2.5-3.5x INCLUDING the gap right before
+   a click — without the 38ms floor, that gap can compress to <10ms and
+   the cursor is still mid-approach when the click fires (v3.19.59). This
+   floor must stay >= Part A's 35ms threshold (item 2) with margin.
+
+9. protected_set / drag_set exclusions in insert_intra_file_pauses and
+   the Step 3b mid-event pause (apply_cycle_features)
+   Both pause-injection mechanisms MUST check protected_set (from item 5)
+   AND drag_set (every index between a DragStart and its DragEnd) before
+   selecting a pivot point. A pivot landing inside an active drag or a
+   click cluster injects hundreds of ms into what should be a <200ms
+   window, breaking double-click and drag timing.
+
+10. Cache correctness (_raw_file_cache / _processed_events_cache)
+    Function: add_file_to_cycle, both copies. Parts A-F (items 2-4) MUST
+    run ONLY on the slow (cache-miss) path — they were originally outside
+    the if/else and ran on every call including cache hits, which didn't
+    break correctness but silently defeated the entire point of caching
+    (v3.19.40). If restructuring this function, confirm Parts A-F are
+    still indented inside the `else:` branch after any edit.
+
+11. (random) sub-subfolder manifest folder_num override
+    Function: _play_nested_loop / _play_nested_group, both copies.
+    _parent_folder_num MUST be threaded through for _random_single items
+    so the manifest reports the PARENT F-step number, not the sub-subfolder
+    number — this is cosmetic, not a parsing risk, but breaking it makes
+    manifests unreadable for (random) folders specifically (v3.19.53).
+
+12. Group-folder output wrapping order: _group_name checked BEFORE
+    args.specific_folders / args.group_subfolders
+    Function: output folder assignment in main(), both copies. The check
+    order matters: _group_name must be tested FIRST, or specific-folders
+    mode silently ignores it and writes flat instead of wrapped output
+    (v3.19.38). This is an output-organization bug, not a playback bug,
+    but it has regressed twice already from refactors that reordered the
+    if/elif chain — preserve the order.
+
+WHEN ADDING A NEW FEATURE: if it touches event timing, event insertion,
+or event removal in any function listed above, re-read that function's
+docstring/comments for the EXACT threshold and EXACT exclusion set before
+changing anything nearby. A "harmless" refactor of surrounding code that
+moves a check outside its original if/else block, or changes a set literal
+without noticing it gates click protection, is how every bug in this list
+was introduced.
+
+===========================================================================
 
 CHANGELOG (recent):
 ===========================================================================
@@ -392,6 +518,31 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             was created, crashing on every run. Fixed by removing the early check and
             instead doing a folder rename on disk AFTER the manifest is written and all
             versions are done — at which point tracker is guaranteed to exist.
+- v3.19.63: Added "CRITICAL FEATURES — DO NOT BREAK" reference section
+            right before the changelog. Documents the 12 load-bearing
+            mechanisms that prevent strung files from getting broken loop
+            actions, misfired clicks, or misparsed input: dual-copy rule,
+            Part A/B/F thresholds, rapid-click detection + protected_set,
+            jitter exclusion + convergence check, idle-movement click
+            exclusion, (random) pre-click gap floor, intra/mid-event pause
+            protected_set checks, cache correctness (Parts A-F slow-path
+            only), (random) manifest folder_num override, and group-folder
+            output wrapping check order. Each entry names the exact
+            function, threshold, and the version where the underlying bug
+            was fixed, so future edits can be checked against the original
+            failure mode before changing anything nearby.
+- v3.19.63: Added CRITICAL FEATURES documentation section near top of
+            file (after FEATURE DOCUMENTATION header). Lists every fix
+            where reverting/altering the underlying mechanism caused real
+            observed breakage: misparsed clicks, wrong-tile clicks, broken
+            loop sequencing, or output naming collisions. Covers Parts
+            A-F of filter_problematic_keys, detect_rapid_click_sequences
+            pixel tolerance, add_pre_click_jitter convergence check,
+            insert_idle_mouse_movements click_types completeness, (random)
+            folder pre-click compression floor, manifest folder_num for
+            (random) sub-subfolders, and _effective_bid output naming
+            consistency. Intended as a checklist before any future change
+            touches these specific mechanisms.
 - v3.19.62: Duplicate folder run naming changed from 555/555.1/555.2
             to 555.1/555.2/555.3. First run now also gets a dot suffix
             instead of the plain bundle id, so the sequence is fully
@@ -1380,7 +1531,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.62"
+VERSION = "v3.19.63"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -1390,6 +1541,137 @@ _fixed_logout_cache:     dict = {}  # str(profile_folder_path) -> {'slots': str,
 
 # ============================================================================
 # FEATURE DOCUMENTATION - ORGANIZED BY PURPOSE
+# ============================================================================
+
+# ============================================================================
+# !! CRITICAL FEATURES — DO NOT MODIFY WITHOUT READING THIS SECTION FIRST !!
+# ============================================================================
+#
+# Every item below was added because removing or altering it caused REAL
+# observed breakage: misparsed clicks, wrong-tile clicks, broken loop
+# sequencing, or corrupted strung output. Before changing ANY of the
+# functions or values named here, re-read the corresponding changelog
+# entry (search by version number) to understand exactly what broke and
+# why the fix works. Treat these as load-bearing pillars — removing one
+# without understanding it WILL silently reintroduce a known bug.
+#
+# DUAL-COPY RULE: this entire file has TWO copies of nearly every function
+# (a legacy copy and an active copy). EVERY fix below must be applied to
+# BOTH copies or the bug will resurface intermittently depending on which
+# code path executes. Always grep for the exact string and verify count=2
+# before editing.
+#
+# ----------------------------------------------------------------------
+# 1. filter_problematic_keys() — Parts A through F (v3.18.x - v3.19.x)
+# ----------------------------------------------------------------------
+#   Six independent passes that fix click/timing issues found in raw
+#   recordings BEFORE any cycle assembly happens. Each part has a narrow,
+#   specific job — do not merge or "simplify" them, they were split apart
+#   because combining logic caused cross-contamination bugs.
+#     Part A: MM->click gap < 35ms -> shift +settle, insert settling MM
+#             at the click's own coordinates (NEVER offset coordinates).
+#     Part B: DragEnd->DragStart re-press gap < 200ms -> shift to 200ms.
+#             Has a "soft path" pre-scan (v3.18.x) that walks back through
+#             MouseMove-only gaps to find indirect DE->...->DS sequences,
+#             tolerance 20px (_RAPID_POS_TOL_SOFT) - this MUST match the
+#             20px tolerance in detect_rapid_click_sequences (item 3) or
+#             clicks 11-20px apart lose protection on one side only.
+#     Part C: adjacent button-event collision guard.
+#     Part D: zero-gap DragEnd guard.
+#     Part E: ONLY clamps idle-parked MouseMove positions that drift out
+#             of bounds. NEVER touches click events. (v3.19.27 added,
+#             v3.19.35 removed an overreaching variant that clamped
+#             click events too — do not reintroduce that.)
+#     Part F: long-gap settling MM, _LONG_GAP_SETTLE_MS=1000ms threshold.
+#             Inserted MM uses the click's EXACT coordinates, never an
+#             offset — an offset here is what causes "hover then jump to
+#             wrong tile" symptoms.
+#
+# ----------------------------------------------------------------------
+# 2. detect_rapid_click_sequences() — pixel tolerance MUST be 20px (v3.19.43)
+# ----------------------------------------------------------------------
+#   Groups clicks within 2000ms and <=20px into protected_ranges. This
+#   tolerance was raised from 10px specifically to match Part B's soft
+#   path (_RAPID_POS_TOL_SOFT=20). If these two values ever diverge again,
+#   clicks 11-20px apart will have inconsistent protection: Part B skips
+#   shifting them but intra/mid-event pause can still inject a pause
+#   between them, breaking double-click timing. protected_ranges output
+#   from this function feeds insert_intra_file_pauses AND the mid-event
+#   pause valid-candidate filter (Step 3b) — both must respect it.
+#
+# ----------------------------------------------------------------------
+# 3. add_pre_click_jitter() — convergence check (v3.19.46, fixed v3.19.49)
+# ----------------------------------------------------------------------
+#   click_types here MUST include DragEnd (v3.19.43) as well as DragStart,
+#   Click, LeftDown/Up, RightDown/Up — DragEnd anchors its own +/-1000ms
+#   exclusion zone for the post-release window.
+#   The CONVERGENCE CHECK (v3.19.46) is what actually matters most: a
+#   MouseMove is excluded from jitter if it is closer to the NEXT upcoming
+#   click than the previous MM was — i.e. it's part of an approach
+#   trajectory. Without this, jitter zigzags the cursor during a long
+#   (>1000ms) approach sweep and misplaces it just before the click fires.
+#   The convergence check is seeded from the position of the FIRST click
+#   in the event list (v3.19.49) — without this seed, the very first
+#   MouseMove in any file has no previous-position reference and bypasses
+#   the convergence check entirely, regardless of how dangerous its
+#   position is. Do not revert this seed to None.
+#
+# ----------------------------------------------------------------------
+# 4. insert_idle_mouse_movements() — click_types MUST include drag events
+#    (v3.19.61)
+# ----------------------------------------------------------------------
+#   click_proximity exclusion (3000ms window) is built from a click_types
+#   set. THIS SET MUST INCLUDE DragStart AND DragEnd, not just Click/
+#   LeftDown/LeftUp/RightDown/RightUp. Omitting drag events here means any
+#   gap >2000ms before a DragStart is eligible for idle-wander insertion —
+#   the cursor wanders away and may not have fully returned when the
+#   DragStart fires, causing a click on the wrong tile. This bug existed
+#   silently for a long time before being found — always check this set
+#   first if "click registers on wrong tile despite hovering correctly in
+#   the original recording" is reported.
+#
+# ----------------------------------------------------------------------
+# 5. (random) folder event compression — pre-click floor (v3.19.56, fixed
+#    v3.19.59)
+# ----------------------------------------------------------------------
+#   The (random)/(randomN) folder feature compresses ALL inter-event gaps
+#   by clamping to _RANDOM_MAX_GAP_MS then dividing by _RANDOM_SPEED_MULT.
+#   This is SAFE for ordinary movement but DANGEROUS for the gap
+#   immediately preceding any click event — compressing it below ~35ms
+#   (Part A's own minimum) means the cursor hasn't settled before the
+#   click fires. _RANDOM_MIN_PRECLICK_MS=38ms is a hard floor applied
+#   ONLY to the gap before DragStart/LeftDown/RightDown/Click. Removing
+#   this floor reintroduces wrong-tile clicks specifically in (random)
+#   tagged folders.
+#
+# ----------------------------------------------------------------------
+# 6. Manifest folder_num for (random) sub-subfolders (v3.19.53)
+# ----------------------------------------------------------------------
+#   Not a click-safety item, but a parsing-consistency one: _random_single
+#   items must carry _parent_folder_num so the manifest logs the PARENT
+#   F-step number, not the sub-subfolder's own number. If this is dropped,
+#   the manifest becomes inconsistent with the actual folder structure,
+#   making it impossible to audit which step produced which file.
+#
+# ----------------------------------------------------------------------
+# 7. Output folder naming / _effective_bid (v3.19.45, v3.19.50, v3.19.58,
+#    v3.19.60, v3.19.62)
+# ----------------------------------------------------------------------
+#   Group-folder wrapping (nesting skill subfolders inside one
+#   (bundle_id) skill_name/ folder) must remain UNCONDITIONAL — it was
+#   made opt-in once (v3.19.45) and that broke the expected zip structure;
+#   it was reverted to always-on in v3.19.50. Do not re-gate it behind a
+#   flag without an explicit request.
+#   When the same folder is selected multiple times via the dropdowns,
+#   each run MUST get a distinct _effective_bid (555.1, 555.2, 555.3 —
+#   v3.19.62) applied consistently to: the wrapper folder name, the
+#   subfolder name (specific-folders mode), AND the strung filename
+#   itself. If only one of these three locations uses _effective_bid
+#   while the others use plain args.bundle_id, duplicate runs silently
+#   overwrite each other on disk (this exact bug occurred — v3.19.58).
+#
+# ============================================================================
+# END CRITICAL FEATURES
 # ============================================================================
 
 
@@ -5441,7 +5723,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.62"
+VERSION = "v3.19.63"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
