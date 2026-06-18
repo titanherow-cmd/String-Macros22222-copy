@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.64
+  Current version: v3.19.65
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -531,6 +531,21 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             function, threshold, and the version where the underlying bug
             was fixed, so future edits can be checked against the original
             failure mode before changing anything nearby.
+- v3.19.65: New folder tag: (choose1). Add to any F-step hub folder
+            whose children are option folders (each containing files).
+            Each cycle: ONE child folder chosen at random (equal prob
+            regardless of file count), then ONE file picked from it.
+            Distinct from same-number pooling (Feature 41) which merges
+            all files into one pool weighted by count. (choose1) weights
+            by folder — each option folder has exactly 1-in-N chance.
+            Example structure:
+              F1- (choose1) cut/
+                cut tree/          <- chosen this cycle?
+                cut long/
+                cut short/
+            Uses _random_single + _parent_folder_num so manifest shows
+            parent F-number. No AF/AL wrapping (handled by _play_nested_group
+            _random_single guard). Applied to both copies.
 - v3.19.63: Added CRITICAL FEATURES documentation section near top of
             file (after FEATURE DOCUMENTATION header). Lists every fix
             where reverting/altering the underlying mechanism caused real
@@ -1531,7 +1546,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.64"
+VERSION = "v3.19.65"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -4216,6 +4231,15 @@ def scan_for_numbered_subfolders(base_path):
             if is_random:
                 is_click_sensitive = True
 
+            # Check if folder is "(choose1)" hub folder:
+            # Hub folder contains child folders (each with their own files).
+            # Each cycle: choose ONE child folder at random, then pick ONE file from it.
+            # This gives each child folder equal probability regardless of file count,
+            # unlike same-number pooling which weights by file count.
+            # Coexists with same-number pooling: flat child folders still pool normally
+            # if they share an F-number; hub folder itself is a distinct F-slot.
+            is_choose1 = bool(re.search(r'\(choose1\)', item.name, re.IGNORECASE))
+
             # Detect nested numbered subfolders (e.g. F5 that has its own F1/F2/F3 inside)
             # Accepts: leading digit/F-prefix OR bracketed number anywhere in name e.g. '(1)'
             nested_subfolder_files = None
@@ -4241,6 +4265,9 @@ def scan_for_numbered_subfolders(base_path):
                             _rlabel = f'random{random_max}' if random_max else 'random'
                             print(f"  Nested folder detected: {item.name} has {len(_nf)} "
                                   f"sub-folders [({_rlabel}) — pick {'up to '+str(random_max) if random_max else 'all'}, shuffled]")
+                        elif is_choose1:
+                            print(f"  Nested folder detected: {item.name} has {len(_nf)} "
+                                  f"sub-folders [(choose1) — pick 1 folder at random, then 1 file from it]")
                         else:
                             print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside")
 
@@ -4268,6 +4295,7 @@ def scan_for_numbered_subfolders(base_path):
                     'nested_root_always_last': nested_root_al,
                     'is_random': is_random,
                     'random_max': random_max,
+                    'is_choose1': is_choose1,
                     'folder_name': item.name,   # stored for name-lookup in specific-folders
                     'folder_path': item,
                 }
@@ -4608,7 +4636,26 @@ class ManualHistoryTracker:
                 if _nsf and folder_num in self._nested_trackers:
                     _nested_tracker = self._nested_trackers[folder_num]
                     _picked_nested = []
-                    if folder_data.get('is_random'):
+                    if folder_data.get('is_choose1'):
+                        # (choose1) hub: pick ONE child folder at random, then ONE file from it.
+                        # Each child folder has equal probability regardless of file count.
+                        _sub_nums = sorted(_nsf.keys())
+                        if _sub_nums:
+                            _chosen_sn = self.rng.choice(_sub_nums)
+                            _sf_data = _nsf[_chosen_sn]
+                            _sf_files = _sf_data.get('files', [])
+                            if _sf_files:
+                                _f = self.rng.choice(_sf_files)
+                                _picked_nested.append({
+                                    '_nested': True,
+                                    '_random_single': True,
+                                    '_parent_folder_num': folder_num,
+                                    'combo': [(_chosen_sn, [_f])],
+                                    'nested_sf': _nsf,
+                                    'nested_root_af': folder_data.get('nested_root_always_first'),
+                                    'nested_root_al': folder_data.get('nested_root_always_last'),
+                                })
+                    elif folder_data.get('is_random'):
                         # (random) / (randomN) tag:
                         # Shuffle all sub-subfolder keys, then pick up to random_max
                         # (or all if random_max is None). Pick 1 file from each chosen.
@@ -5730,7 +5777,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.64"
+VERSION = "v3.19.65"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -5761,6 +5808,20 @@ FOLDER TAGS (detected in folder name, case-insensitive):
                         sub-subfolders per cycle. Example: (random10) with 28 folders
                         picks 10 different folders each cycle, shuffled, 1 file each.
                         N resets each cycle — no repeat guarantee across cycles.
+  - "(choose1)"       -> Hub folder tag. Hub contains child option-folders (each
+                        with their own files). Each cycle: ONE child folder chosen
+                        at random (equal probability per folder regardless of file
+                        count), then ONE file picked from it. Distinct from same-
+                        number pooling (Feature 41) which merges all files and
+                        weights by count. Use (choose1) when you want each option
+                        folder to have exactly 1-in-N chance of being selected.
+                        Child folders detected the same way as (random): leading
+                        digit/F-prefix OR bracketed number in name.
+                        Example:
+                          F1- (choose1) cut/
+                            cut tree/           <- 1/3 chance
+                            cut long/           <- 1/3 chance
+                            cut short/          <- 1/3 chance
   - (Decimal support: "3.5" goes between folders 3 and 4)
 
 FILE TAGS (detected in filename, case-insensitive):
@@ -8893,6 +8954,15 @@ def scan_for_numbered_subfolders(base_path):
             if is_random:
                 is_click_sensitive = True
 
+            # Check if folder is "(choose1)" hub folder:
+            # Hub folder contains child folders (each with their own files).
+            # Each cycle: choose ONE child folder at random, then pick ONE file from it.
+            # This gives each child folder equal probability regardless of file count,
+            # unlike same-number pooling which weights by file count.
+            # Coexists with same-number pooling: flat child folders still pool normally
+            # if they share an F-number; hub folder itself is a distinct F-slot.
+            is_choose1 = bool(re.search(r'\(choose1\)', item.name, re.IGNORECASE))
+
             # Detect nested numbered subfolders (e.g. F5 that has its own F1/F2/F3 inside)
             # Accepts: leading digit/F-prefix OR bracketed number anywhere in name e.g. '(1)'
             nested_subfolder_files = None
@@ -8918,6 +8988,9 @@ def scan_for_numbered_subfolders(base_path):
                             _rlabel = f'random{random_max}' if random_max else 'random'
                             print(f"  Nested folder detected: {item.name} has {len(_nf)} "
                                   f"sub-folders [({_rlabel}) — pick {'up to '+str(random_max) if random_max else 'all'}, shuffled]")
+                        elif is_choose1:
+                            print(f"  Nested folder detected: {item.name} has {len(_nf)} "
+                                  f"sub-folders [(choose1) — pick 1 folder at random, then 1 file from it]")
                         else:
                             print(f"  Nested folder detected: {item.name} has {len(_nf)} sub-folders inside")
 
@@ -8945,6 +9018,7 @@ def scan_for_numbered_subfolders(base_path):
                     'nested_root_always_last': nested_root_al,
                     'is_random': is_random,
                     'random_max': random_max,
+                    'is_choose1': is_choose1,
                     'folder_name': item.name,   # stored for name-lookup in specific-folders
                     'folder_path': item,
                 }
@@ -9285,7 +9359,26 @@ class ManualHistoryTracker:
                 if _nsf and folder_num in self._nested_trackers:
                     _nested_tracker = self._nested_trackers[folder_num]
                     _picked_nested = []
-                    if folder_data.get('is_random'):
+                    if folder_data.get('is_choose1'):
+                        # (choose1) hub: pick ONE child folder at random, then ONE file from it.
+                        # Each child folder has equal probability regardless of file count.
+                        _sub_nums = sorted(_nsf.keys())
+                        if _sub_nums:
+                            _chosen_sn = self.rng.choice(_sub_nums)
+                            _sf_data = _nsf[_chosen_sn]
+                            _sf_files = _sf_data.get('files', [])
+                            if _sf_files:
+                                _f = self.rng.choice(_sf_files)
+                                _picked_nested.append({
+                                    '_nested': True,
+                                    '_random_single': True,
+                                    '_parent_folder_num': folder_num,
+                                    'combo': [(_chosen_sn, [_f])],
+                                    'nested_sf': _nsf,
+                                    'nested_root_af': folder_data.get('nested_root_always_first'),
+                                    'nested_root_al': folder_data.get('nested_root_always_last'),
+                                })
+                    elif folder_data.get('is_random'):
                         # (random) / (randomN) tag:
                         # Shuffle all sub-subfolder keys, then pick up to random_max
                         # (or all if random_max is None). Pick 1 file from each chosen.
