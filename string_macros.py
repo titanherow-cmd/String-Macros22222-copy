@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.63
+  Current version: v3.19.64
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -1531,7 +1531,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.63"
+VERSION = "v3.19.64"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -1546,6 +1546,13 @@ _fixed_logout_cache:     dict = {}  # str(profile_folder_path) -> {'slots': str,
 # ============================================================================
 # !! CRITICAL FEATURES — DO NOT MODIFY WITHOUT READING THIS SECTION FIRST !!
 # ============================================================================
+#
+# MAINTENANCE REMINDER: whenever a future fix touches click timing, jitter,
+# idle movement, drag/click parsing, loop sequencing, or output naming —
+# and that fix would have caused real breakage if it had stayed wrong —
+# add a new numbered entry below (same style as the existing ones) in the
+# SAME edit that makes the fix. Do this immediately, not "later." This
+# list is only useful if it stays current with every load-bearing change.
 #
 # Every item below was added because removing or altering it caused REAL
 # observed breakage: misparsed clicks, wrong-tile clicks, broken loop
@@ -5723,7 +5730,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.63"
+VERSION = "v3.19.64"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
