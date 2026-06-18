@@ -1,0 +1,50 @@
+[
+  {
+    "Type": "KeyUp",
+    "Time": 98,
+    "X": null,
+    "Y": null,
+    "Delta": null,
+    "KeyCode": 35
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 332,
+    "X": 975,
+    "Y": 420,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 344,
+    "X": 975,
+    "Y": 423,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "DragStart",
+    "Time": 636,
+    "X": 975,
+    "Y": 423,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "DragEnd",
+    "Time": 726,
+    "X": 975,
+    "Y": 423,
+    "Delta": null,
+    "KeyCode": null
+  },
+  {
+    "Type": "MouseMove",
+    "Time": 885,
+    "X": 975,
+    "Y": 420,
+    "Delta": null,
+    "KeyCode": null
+  }
+]
