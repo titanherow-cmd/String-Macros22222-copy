@@ -3,7 +3,7 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.65
+  Current version: v3.19.66
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
 
@@ -531,6 +531,20 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
             function, threshold, and the version where the underlying bug
             was fixed, so future edits can be checked against the original
             failure mode before changing anything nearby.
+- v3.19.66: (choose1) now respects (random) tag on chosen child folder.
+            If (choose1) picks a child folder that is itself tagged with
+            (random) or (randomN), instead of picking 1 file it runs the
+            full random multi-pick: shuffles the child's sub-subfolders,
+            picks 1 file from each (up to random_max if set), plays them
+            all in shuffled order. Example:
+              F1- (choose1) cut/
+                cut tree/              <- picked: 1 file
+                cut (random) multi/    <- picked: ALL sub-subfolders, 1 each
+                  swing1/
+                  swing2/
+                  swing3/
+            If 'cut (random) multi/' is chosen: plays 1 file from each of
+            swing1/, swing2/, swing3/ in random order. Applied both copies.
 - v3.19.65: New folder tag: (choose1). Add to any F-step hub folder
             whose children are option folders (each containing files).
             Each cycle: ONE child folder chosen at random (equal prob
@@ -1546,7 +1560,7 @@ KNOWN ISSUES (not yet fixed): (not yet fixed):
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.65"
+VERSION = "v3.19.66"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -4637,24 +4651,52 @@ class ManualHistoryTracker:
                     _nested_tracker = self._nested_trackers[folder_num]
                     _picked_nested = []
                     if folder_data.get('is_choose1'):
-                        # (choose1) hub: pick ONE child folder at random, then ONE file from it.
-                        # Each child folder has equal probability regardless of file count.
+                        # (choose1) hub: pick ONE child folder at random (equal prob
+                        # per folder regardless of file count), then:
+                        # - If chosen child is tagged (random)/(randomN): run full
+                        #   random multi-pick on its sub-subfolders (all shuffled,
+                        #   1 file each, up to random_max if set).
+                        # - Otherwise: pick 1 file from the chosen folder.
                         _sub_nums = sorted(_nsf.keys())
                         if _sub_nums:
                             _chosen_sn = self.rng.choice(_sub_nums)
                             _sf_data = _nsf[_chosen_sn]
-                            _sf_files = _sf_data.get('files', [])
-                            if _sf_files:
-                                _f = self.rng.choice(_sf_files)
-                                _picked_nested.append({
-                                    '_nested': True,
-                                    '_random_single': True,
-                                    '_parent_folder_num': folder_num,
-                                    'combo': [(_chosen_sn, [_f])],
-                                    'nested_sf': _nsf,
-                                    'nested_root_af': folder_data.get('nested_root_always_first'),
-                                    'nested_root_al': folder_data.get('nested_root_always_last'),
-                                })
+                            if _sf_data.get('is_random'):
+                                # Chosen child is (random)/(randomN) — run its full logic
+                                _child_nsf = _sf_data.get('nested_subfolder_files', {})
+                                if _child_nsf:
+                                    _child_nums = sorted(_child_nsf.keys())
+                                    self.rng.shuffle(_child_nums)
+                                    _rmax = _sf_data.get('random_max')
+                                    if _rmax and _rmax < len(_child_nums):
+                                        _child_nums = _child_nums[:_rmax]
+                                    for _csn in _child_nums:
+                                        _csf_files = _child_nsf[_csn].get('files', [])
+                                        if _csf_files:
+                                            _f = self.rng.choice(_csf_files)
+                                            _picked_nested.append({
+                                                '_nested': True,
+                                                '_random_single': True,
+                                                '_parent_folder_num': folder_num,
+                                                'combo': [(_csn, [_f])],
+                                                'nested_sf': _child_nsf,
+                                                'nested_root_af': folder_data.get('nested_root_always_first'),
+                                                'nested_root_al': folder_data.get('nested_root_always_last'),
+                                            })
+                            else:
+                                # Normal child — pick 1 file
+                                _sf_files = _sf_data.get('files', [])
+                                if _sf_files:
+                                    _f = self.rng.choice(_sf_files)
+                                    _picked_nested.append({
+                                        '_nested': True,
+                                        '_random_single': True,
+                                        '_parent_folder_num': folder_num,
+                                        'combo': [(_chosen_sn, [_f])],
+                                        'nested_sf': _nsf,
+                                        'nested_root_af': folder_data.get('nested_root_always_first'),
+                                        'nested_root_al': folder_data.get('nested_root_always_last'),
+                                    })
                     elif folder_data.get('is_random'):
                         # (random) / (randomN) tag:
                         # Shuffle all sub-subfolder keys, then pick up to random_max
@@ -5777,7 +5819,7 @@ This ensures the documentation stays accurate and users know what features exist
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.65"
+VERSION = "v3.19.66"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 # Two-level file cache — note: module-level dicts already declared above;
 # these references ensure the second copy block also documents them.
@@ -9360,24 +9402,52 @@ class ManualHistoryTracker:
                     _nested_tracker = self._nested_trackers[folder_num]
                     _picked_nested = []
                     if folder_data.get('is_choose1'):
-                        # (choose1) hub: pick ONE child folder at random, then ONE file from it.
-                        # Each child folder has equal probability regardless of file count.
+                        # (choose1) hub: pick ONE child folder at random (equal prob
+                        # per folder regardless of file count), then:
+                        # - If chosen child is tagged (random)/(randomN): run full
+                        #   random multi-pick on its sub-subfolders (all shuffled,
+                        #   1 file each, up to random_max if set).
+                        # - Otherwise: pick 1 file from the chosen folder.
                         _sub_nums = sorted(_nsf.keys())
                         if _sub_nums:
                             _chosen_sn = self.rng.choice(_sub_nums)
                             _sf_data = _nsf[_chosen_sn]
-                            _sf_files = _sf_data.get('files', [])
-                            if _sf_files:
-                                _f = self.rng.choice(_sf_files)
-                                _picked_nested.append({
-                                    '_nested': True,
-                                    '_random_single': True,
-                                    '_parent_folder_num': folder_num,
-                                    'combo': [(_chosen_sn, [_f])],
-                                    'nested_sf': _nsf,
-                                    'nested_root_af': folder_data.get('nested_root_always_first'),
-                                    'nested_root_al': folder_data.get('nested_root_always_last'),
-                                })
+                            if _sf_data.get('is_random'):
+                                # Chosen child is (random)/(randomN) — run its full logic
+                                _child_nsf = _sf_data.get('nested_subfolder_files', {})
+                                if _child_nsf:
+                                    _child_nums = sorted(_child_nsf.keys())
+                                    self.rng.shuffle(_child_nums)
+                                    _rmax = _sf_data.get('random_max')
+                                    if _rmax and _rmax < len(_child_nums):
+                                        _child_nums = _child_nums[:_rmax]
+                                    for _csn in _child_nums:
+                                        _csf_files = _child_nsf[_csn].get('files', [])
+                                        if _csf_files:
+                                            _f = self.rng.choice(_csf_files)
+                                            _picked_nested.append({
+                                                '_nested': True,
+                                                '_random_single': True,
+                                                '_parent_folder_num': folder_num,
+                                                'combo': [(_csn, [_f])],
+                                                'nested_sf': _child_nsf,
+                                                'nested_root_af': folder_data.get('nested_root_always_first'),
+                                                'nested_root_al': folder_data.get('nested_root_always_last'),
+                                            })
+                            else:
+                                # Normal child — pick 1 file
+                                _sf_files = _sf_data.get('files', [])
+                                if _sf_files:
+                                    _f = self.rng.choice(_sf_files)
+                                    _picked_nested.append({
+                                        '_nested': True,
+                                        '_random_single': True,
+                                        '_parent_folder_num': folder_num,
+                                        'combo': [(_chosen_sn, [_f])],
+                                        'nested_sf': _nsf,
+                                        'nested_root_af': folder_data.get('nested_root_always_first'),
+                                        'nested_root_al': folder_data.get('nested_root_always_last'),
+                                    })
                     elif folder_data.get('is_random'):
                         # (random) / (randomN) tag:
                         # Shuffle all sub-subfolder keys, then pick up to random_max
