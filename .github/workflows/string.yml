@@ -33,7 +33,6 @@ on:
           - 'x'
           - '7- Mining files'
 
-          
       folder_2:
         description: 'Folder 2'
         required: false
@@ -63,6 +62,7 @@ on:
           - '6.5- Finish up noted smth alch leftover'
           - 'x'
           - '7- Mining files'
+
       folder_3:
         description: 'Folder 3'
         required: false
@@ -92,14 +92,24 @@ on:
           - '6.5- Finish up noted smth alch leftover'
           - 'x'
           - '7- Mining files'
+
+      # ===== NEW INPUT =====
+      folder_numbers:
+        description: 'Comma‑separated folder numbers (e.g., 20, 66, 51, 22, 30, 65.1) – overrides dropdowns'
+        required: false
+        default: ''
+        type: string
+
       versions:
         description: 'Total versions to generate *'
         required: true
         default: '22'
+
       target_minutes:
         description: 'Target duration per stringed file *'
         required: true
         default: '1'
+
       enable_chat:
         description: 'Enable chat inserts (20% of files)'
         required: false
@@ -139,6 +149,49 @@ jobs:
         id: process_folders
         run: |
           SAVED_FILE=".github/specific_folders_to_include.txt"
+          FOLDER_NUMBERS="${{ github.event.inputs.folder_numbers }}"
+
+          # --- NEW: If folder_numbers is provided, use it to generate the filter ---
+          if [ -n "$FOLDER_NUMBERS" ]; then
+            echo "Using folder_numbers input: $FOLDER_NUMBERS"
+            mkdir -p .github
+
+            # Convert comma-separated list to array
+            IFS=',' read -ra NUMS <<< "$FOLDER_NUMBERS"
+
+            # Scan input_macros for matching folder names
+            MATCHED_FOLDERS=()
+            for DIR in input_macros/*/; do
+              DIRNAME=$(basename "$DIR")
+              # Extract numeric prefix (handles decimals: 20, 65.1, etc.)
+              NUM=$(echo "$DIRNAME" | grep -oE '^[0-9]+(\.[0-9]+)?' || true)
+              if [ -n "$NUM" ]; then
+                for TARGET in "${NUMS[@]}"; do
+                  TARGET=$(echo "$TARGET" | xargs)  # trim whitespace
+                  if [ "$NUM" = "$TARGET" ]; then
+                    MATCHED_FOLDERS+=("$DIRNAME")
+                    break
+                  fi
+                done
+              fi
+            done
+
+            if [ ${#MATCHED_FOLDERS[@]} -eq 0 ]; then
+              echo "No matching folders found for numbers: $FOLDER_NUMBERS"
+              exit 1
+            fi
+
+            printf '%s\n' "${MATCHED_FOLDERS[@]}" > "$SAVED_FILE"
+            echo "FOLDERS_FILE=$SAVED_FILE" >> "$GITHUB_ENV"
+            echo "USE_SPECIFIC=true" >> "$GITHUB_ENV"
+            echo "FOLDERS_SOURCE=folder_numbers (${#MATCHED_FOLDERS[@]} folder(s) matched)" >> "$GITHUB_ENV"
+            echo "FOLDERS_UPDATED=true" >> "$GITHUB_ENV"
+            echo "Matched folders:"
+            printf '  - %s\n' "${MATCHED_FOLDERS[@]}"
+            exit 0
+          fi
+
+          # --- EXISTING LOGIC (unchanged) ---
           F1="${{ github.event.inputs.folder_1 }}"
           F2="${{ github.event.inputs.folder_2 }}"
           F3="${{ github.event.inputs.folder_3 }}"
