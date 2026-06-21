@@ -100,16 +100,16 @@ on:
         default: ''
         type: string
 
-      versions:
-        description: 'Total versions to generate *'
-        required: true
-        default: '22'
-
       target_minutes:
         description: 'Target duration per stringed file *'
         required: true
         default: '1'
 
+      versions:
+        description: 'Total versions to generate *'
+        required: true
+        default: '22'
+        
       enable_chat:
         description: 'Enable chat inserts (20% of files)'
         required: false
