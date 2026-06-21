@@ -95,7 +95,7 @@ on:
 
       # ===== NEW INPUT =====
       folder_numbers:
-        description: 'Comma‑separated folder numbers (e.g., 20, 66, 51, 22, 30, 65.1) – overrides dropdowns'
+        description: 'Comma‑separated folder numbers'
         required: false
         default: ''
         type: string
