@@ -17,8 +17,8 @@ STRING MACROS - FEATURE LIST
     history deduplication for folders with hubs and nested structures.
   - parse_max_files now returns None if no -N- pattern is found, allowing
     proper override in same-number folder pooling.
-  - Removed dead 'dmwm_file_set' variable from scan_for_numbered_subfolders
-    and all callers.
+  - Removed dead 'dmwm_file_set' variable and all related logic from
+    scan_for_numbered_subfolders, string_cycle, apply_cycle_features, and main().
 
 ===========================================================================
                     GROUP 1: PAUSE BREAKS
@@ -321,7 +321,7 @@ STRING MACROS - FEATURE LIST
         OR — if ANY contributing folder has the tag, the merged slot gets it
       - Scalar tags (optional_chance, max_files): first non-None value wins
       - Nested subfolders: inner dicts merged by inner slot number
-    A [Pool] log line is printed for each merge: "F2: merged 'name' (N files total)"
+    A [Pool] log line is printed for each merge: "F2: merged 'name' (X files total)"
 
 42. GROUP FOLDER SUPPORT
     Organizer folders one level below input_macros/ whose children have
@@ -1789,13 +1789,13 @@ def string_cycle(subfolder_files, combination, rng,
                         transition still runs (position accuracy preserved).
     """
     
-    def add_file_to_cycle(file_path, folder_num, is_dmwm, file_label,
+    def add_file_to_cycle(file_path, folder_num, file_label,
                           slot_is_click_sensitive=False, slot_is_random=False):
         """Helper to add a file to the cycle.
         slot_is_click_sensitive: suppresses cursor transition TO this file.
         The whole-cycle flag (is_click_sensitive) controls apply_cycle_features.
         """
-        nonlocal timeline, cycle_events, file_info_list, has_dmwm, total_pre_pause, total_transition_time, total_snap_gap_time, files_added
+        nonlocal timeline, cycle_events, file_info_list, total_pre_pause, total_transition_time, total_snap_gap_time, files_added
         
         # Load events — with two-level cache to avoid re-reading disk and
         # re-running Parts A-F for the same file across multiple versions.
@@ -2104,10 +2104,6 @@ def string_cycle(subfolder_files, combination, rng,
                     'base_time': base_time_pre_filter,
                 }
 
-        # Check if dmwm file
-        if is_dmwm:
-            has_dmwm = True
-        
         # Normalize timing — use pre-filter base so leading gaps are preserved
         base_time = base_time_pre_filter
         
@@ -2210,7 +2206,7 @@ def string_cycle(subfolder_files, combination, rng,
         # Update timeline and track THIS file's end time
         if cycle_events:
             timeline = cycle_events[-1]['Time']
-            file_info_list.append((folder_num, file_label, is_dmwm, timeline))
+            file_info_list.append((folder_num, file_label, timeline))
         files_added += 1
     
     # Main cycle building
@@ -2219,7 +2215,6 @@ def string_cycle(subfolder_files, combination, rng,
     # Start buffer: 5–8 seconds of silence before the first event so the macro
     # player has time to initialise before any input fires.
     timeline = rng.uniform(5000.0, 8000.0)
-    has_dmwm = False
     
     files_added = 0  # Counts files added; guards pre-play buffer for every non-first file
     # NEW: Track pre-file pauses, post-pause delays, cursor transitions, and distraction durations
@@ -2240,8 +2235,7 @@ def string_cycle(subfolder_files, combination, rng,
         single_always_last  = _pick_af_al(only_folder_data.get('always_last',  []), rng)
         # Play always_first only when flagged (outer loop controls first-cycle)
         if single_always_first and play_always_first:
-            is_dmwm = single_always_first in dmwm_file_set
-            add_file_to_cycle(single_always_first, only_folder_num, is_dmwm,
+            add_file_to_cycle(single_always_first, only_folder_num,
                               f"[ALWAYS FIRST] {single_always_first.name}")
     
     def _maybe_insert_distraction(cur_folder_num):
@@ -2256,7 +2250,7 @@ def string_cycle(subfolder_files, combination, rng,
                          if hasattr(distraction_files, 'next')
                          else rng.choice(distraction_files))
             t_before  = timeline
-            add_file_to_cycle(dist_path, cur_folder_num, False,
+            add_file_to_cycle(dist_path, cur_folder_num,
                                f"[DISTRACTION] {dist_path.name}")
             total_distraction_pause += (timeline - t_before)
 
@@ -2277,18 +2271,15 @@ def string_cycle(subfolder_files, combination, rng,
             _saf = _pick_af_al(_sfd.get('always_first', []), rng)
             _sal = _pick_af_al(_sfd.get('always_last',  []), rng)
             if _saf:
-                _is_dmwm = _saf in dmwm_file_set
-                add_file_to_cycle(_saf, _manifest_fn, _is_dmwm, f"[ALWAYS FIRST] {_saf.name}")
+                add_file_to_cycle(_saf, _manifest_fn, f"[ALWAYS FIRST] {_saf.name}")
             for _fp in _sfl:
                 if isinstance(_fp, dict) and _fp.get('_nested'):
                     _play_nested_loop(_fp)
                 else:
-                    _is_dmwm = _fp in dmwm_file_set
-                    add_file_to_cycle(_fp, _manifest_fn, _is_dmwm, _fp.name,
+                    add_file_to_cycle(_fp, _manifest_fn, _fp.name,
                                       slot_is_random=_is_random_single)
             if _sal:
-                _is_dmwm = _sal in dmwm_file_set
-                add_file_to_cycle(_sal, _manifest_fn, _is_dmwm, f"[ALWAYS LAST] {_sal.name}")
+                add_file_to_cycle(_sal, _manifest_fn, f"[ALWAYS LAST] {_sal.name}")
 
     def _play_nested_group(nested_items_list):
         """Play all loops for a nested folder slot.
@@ -2307,13 +2298,11 @@ def string_cycle(subfolder_files, combination, rng,
         _naf = _pick_af_al(nested_items_list[0].get('nested_root_af', []), rng)
         _nal = _pick_af_al(nested_items_list[0].get('nested_root_al', []), rng)
         if _naf:
-            _is_dmwm = _naf in dmwm_file_set
-            add_file_to_cycle(_naf, 0.0, _is_dmwm, f"[ALWAYS FIRST] {_naf.name}")
+            add_file_to_cycle(_naf, 0.0, f"[ALWAYS FIRST] {_naf.name}")
         for _ni in nested_items_list:
             _play_nested_loop(_ni)
         if _nal:
-            _is_dmwm = _nal in dmwm_file_set
-            add_file_to_cycle(_nal, 0.0, _is_dmwm, f"[ALWAYS LAST] {_nal.name}")
+            add_file_to_cycle(_nal, 0.0, f"[ALWAYS LAST] {_nal.name}")
 
     for idx_combo, (folder_num, file_list) in enumerate(combination):
         folder_data = subfolder_files.get(folder_num, {})
@@ -2333,8 +2322,7 @@ def string_cycle(subfolder_files, combination, rng,
         elif single_subfolder:
             # Single-subfolder: always_first/last already played above/below loop
             for item in _regular_items:
-                is_dmwm = item in dmwm_file_set
-                add_file_to_cycle(item, folder_num, is_dmwm, item.name)
+                add_file_to_cycle(item, folder_num, item.name)
         else:
             # Multi-subfolder: always_first/last wrap ONLY the files of their OWN folder.
             # slot_cs: True if this specific subfolder is click-sensitive (per-slot flag).
@@ -2342,16 +2330,13 @@ def string_cycle(subfolder_files, combination, rng,
             af = _pick_af_al(folder_data.get('always_first', []), rng)
             al = _pick_af_al(folder_data.get('always_last',  []), rng)
             if af:
-                is_dmwm = af in dmwm_file_set
-                add_file_to_cycle(af, folder_num, is_dmwm, f"[ALWAYS FIRST] {af.name}",
+                add_file_to_cycle(af, folder_num, f"[ALWAYS FIRST] {af.name}",
                                   slot_is_click_sensitive=_slot_cs)
             for item in _regular_items:
-                is_dmwm = item in dmwm_file_set
-                add_file_to_cycle(item, folder_num, is_dmwm, item.name,
+                add_file_to_cycle(item, folder_num, item.name,
                                   slot_is_click_sensitive=_slot_cs)
             if al:
-                is_dmwm = al in dmwm_file_set
-                add_file_to_cycle(al, folder_num, is_dmwm, f"[ALWAYS LAST] {al.name}",
+                add_file_to_cycle(al, folder_num, f"[ALWAYS LAST] {al.name}",
                                   slot_is_click_sensitive=_slot_cs)
 
     # DISTRACTION: maybe insert AFTER the very last folder
@@ -2360,14 +2345,12 @@ def string_cycle(subfolder_files, combination, rng,
         _maybe_insert_distraction(last_folder_num)
 
     if single_subfolder and single_always_last and play_always_last:
-        is_dmwm = single_always_last in dmwm_file_set
-        add_file_to_cycle(single_always_last, only_folder_num, is_dmwm,
+        add_file_to_cycle(single_always_last, only_folder_num,
                           f"[ALWAYS LAST] {single_always_last.name}")
 
     return {
         'events': cycle_events,
         'file_info': file_info_list,
-        'has_dmwm': has_dmwm,
         'pre_pause_total': total_pre_pause,
         'transition_total': total_transition_time,
         'snap_gap_total': total_snap_gap_time,
@@ -2903,7 +2886,7 @@ def generate_distraction_files(distractions_src_folder, out_folder, rng,
 
     return written
 
-def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
+def apply_cycle_features(cycle_events, rng, is_raw, is_inef=False,
                           is_click_sensitive=False, mult=1.0):
     """
     Apply anti-detection features to a complete cycle.
@@ -2913,7 +2896,6 @@ def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
         rng: Random generator
         is_raw:  If True, 0% within-file pause (no pauses inserted)
         is_inef: If True, 15% within-file pause; False = 5% (normal)
-        has_dmwm: If True, skip ALL modifications
         is_click_sensitive: If True, skip jitter and idle mouse movements
                             (no coordinate-changing features applied)
 
@@ -2928,9 +2910,6 @@ def apply_cycle_features(cycle_events, rng, is_raw, has_dmwm, is_inef=False,
         'idle_movements': 0,
         'pause_pivots': [],  # [(raw_pivot_time, amount)] for manifest correction
     }
-
-    if has_dmwm:
-        return cycle_events, stats
 
     # Step 1: Jitter - SKIPPED for click-sensitive folders
     if not is_click_sensitive:
@@ -3446,10 +3425,6 @@ def scan_for_numbered_subfolders(base_path):
             elif 'always last' in _name or 'alwayslast' in _name:
                 root_always_last.append(_rf)
                 print(f"  Found root-level 'always last': {_rf.name}")
-
-    # Add unmodified files to their respective numbered folder pools
-    # They become regular files, just tracked separately
-    # dmwm_file_set is no longer returned; we handle them in scan.
 
     return numbered_folders, non_json_files, root_always_first, root_always_last
 
@@ -4156,7 +4131,6 @@ def main():
                 elif _fi.get('is_optional'):    _sp.append(f"{_n} (optional)")
                 if _fi.get('is_time_sensitive'): _sp.append(f"{_n} (time-sensitive)")
             if _sp: print(f"{indent}    Special: {', '.join(_sp)}")
-        if fd.get('dmwm_files'): print(f"{indent}    Unmodified: {len(fd['dmwm_files'])} files")
         if fd.get('non_json'):   print(f"{indent}    Non-JSON:   {len(fd['non_json'])} files")
 
     def _has_f_prefix_subdir(d):
@@ -4229,8 +4203,6 @@ def main():
         Returns a valid folder_data dict or None.
         """
         _cn, _cnj, _craf, _cral = scan_for_numbered_subfolders(folder)
-        # Note: dmwm files are no longer returned separately; they are in _cn[0]
-        # after processing, but we handle them via the scan result.
         if not _cn:
             # Try one level deeper: child/container/F1-... pattern
             for _sub in sorted(folder.iterdir()):
@@ -4286,9 +4258,6 @@ def main():
 
         # ── Normal macro folder ──────────────────────────────────────────
         numbered_subfolders, non_json_files, root_always_first, root_always_last = scan_for_numbered_subfolders(folder)
-
-        # The dmwm files are already merged into numbered_subfolders[0] by scan_for_numbered_subfolders.
-        # We don't need a separate dmwm_file_set variable.
 
         if numbered_subfolders:
             _register_macro_folder({
@@ -4899,7 +4868,7 @@ def main():
 
             # Build cycles until target reached
             stringed_events = []
-            all_file_info_with_times = []  # List of (folder_num, filename, is_dmwm, end_time) tuples
+            all_file_info_with_times = []  # List of (folder_num, filename, end_time) tuples
             total_intra = 0
             total_inter = 0
             total_idle = 0
@@ -4943,8 +4912,7 @@ def main():
                             stringed_events.append(_ne)
                         _raf_end = stringed_events[-1]['Time']
                         all_file_info_with_times.append(
-                            (0.0, f"[ALWAYS FIRST] {_picked_raf.name}",
-                             _picked_raf in dmwm_file_set, _raf_end)
+                            (0.0, f"[ALWAYS FIRST] {_picked_raf.name}", _raf_end)
                         )
                         # Advance timeline tracker so first cycle gets proper buffer
                         total_pre_file += rng.uniform(500.0, 800.0) * mult
@@ -5014,14 +4982,13 @@ def main():
                 
                 cycle_events = cycle_result['events']
                 file_info = cycle_result['file_info']
-                has_dmwm = cycle_result['has_dmwm']
                 
                 if not cycle_events:
                     break
                 
                 # APPLY FEATURES to ENTIRE cycle
                 cycle_with_features, stats = apply_cycle_features(
-                    cycle_events, rng, is_raw, has_dmwm, is_inef=is_inef,
+                    cycle_events, rng, is_raw, is_inef=is_inef,
                     is_click_sensitive=folder_is_click_sensitive, mult=mult
                 )
                 
@@ -5156,12 +5123,12 @@ def main():
                 # each pause_pivot (raw_t, amount) shifts all files whose raw end
                 # time >= raw_t forward by amount. Both pivots are in cycle-raw space.
                 _pp = stats.get('pause_pivots', [])
-                for folder_num, filename, is_dmwm, end_time_in_cycle in file_info:
+                for folder_num, filename, end_time_in_cycle in file_info:
                     _corr = end_time_in_cycle + sum(
                         _pa for _pt, _pa in _pp if _pt <= end_time_in_cycle
                     )
                     actual_end_time = _corr + offset
-                    all_file_info_with_times.append((folder_num, filename, is_dmwm, actual_end_time))
+                    all_file_info_with_times.append((folder_num, filename, actual_end_time))
                 
                 # Update stats
                 total_intra += stats['intra_pauses']
@@ -5198,8 +5165,7 @@ def main():
                             stringed_events.append(_ne)
                         _al_end = stringed_events[-1]['Time']
                         all_file_info_with_times.append(
-                            (_only_fn, f"[ALWAYS LAST] {_al_file.name}",
-                             _al_file in dmwm_file_set, _al_end)
+                            (_only_fn, f"[ALWAYS LAST] {_al_file.name}", _al_end)
                         )
 
             # ROOT-LEVEL always_last: play ONCE after all cycles
@@ -5219,8 +5185,7 @@ def main():
                             stringed_events.append(_ne)
                         _ral_end = stringed_events[-1]['Time']
                         all_file_info_with_times.append(
-                            (0.0, f"[ALWAYS LAST] {_picked_ral.name}",
-                             _picked_ral in dmwm_file_set, _ral_end)
+                            (0.0, f"[ALWAYS LAST] {_picked_ral.name}", _ral_end)
                         )
                 except Exception as _e:
                     print(f"  [!] Root always_last load error: {_e}")
@@ -5245,16 +5210,16 @@ def main():
                         stringed_events[split_idx]['Time'] - massive_pause_ms
                     )
                     updated_file_info = []
-                    for folder_num, filename, is_dmwm, end_time in all_file_info_with_times:
+                    for folder_num, filename, end_time in all_file_info_with_times:
                         if end_time >= split_time_pre_shift:
                             # File ends at or after the split → shift forward
                             updated_file_info.append(
-                                (folder_num, filename, is_dmwm, end_time + massive_pause_ms)
+                                (folder_num, filename, end_time + massive_pause_ms)
                             )
                         else:
                             # File ends before the split → unaffected
                             updated_file_info.append(
-                                (folder_num, filename, is_dmwm, end_time)
+                                (folder_num, filename, end_time)
                             )
                     all_file_info_with_times = updated_file_info
             
@@ -5328,8 +5293,7 @@ def main():
             ]
             
             # Add file list with F-number prefix and cumulative timeline
-            for folder_num, filename, is_dmwm, end_time in all_file_info_with_times:
-                unmod_prefix = "[UNMODIFIED] " if is_dmwm else ""
+            for folder_num, filename, end_time in all_file_info_with_times:
                 # F-number prefix: skip for root-level (folder_num==0) and
                 # bracket-tagged entries ([ALWAYS FIRST], [DISTRACTION], etc.)
                 if folder_num and folder_num != 0.0 and not filename.startswith('['):
@@ -5337,7 +5301,7 @@ def main():
                     f_prefix = f"F{_fn_label}- "
                 else:
                     f_prefix = ""
-                manifest_entry.append(f"  * {f_prefix}{unmod_prefix}{filename} (Ends at {format_ms_precise(end_time)})")
+                manifest_entry.append(f"  * {f_prefix}{filename} (Ends at {format_ms_precise(end_time)})")
             
             manifest_lines.extend(manifest_entry)
         
@@ -5386,9 +5350,9 @@ def main():
                         # stem gets its end time extended by the chat duration.
                         _ct_name = _ct.name
                         all_file_info_with_times = [
-                            (fn, fnm, idm,
+                            (fn, fnm,
                              et + _cdur if _ct_name in fnm else et)
-                            for fn, fnm, idm, et in all_file_info_with_times
+                            for fn, fnm, et in all_file_info_with_times
                         ]
                     except Exception as _ce:
                         print(f"     [!] Chat insert failed ({_ct.name}): {_ce}")
