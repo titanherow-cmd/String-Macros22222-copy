@@ -3,21 +3,477 @@
 STRING MACROS - FEATURE LIST
 ===========================================================================
 
-  Current version: v3.19.66
+  Current version: v3.20.0
   File ratio (default 12): 2 Raw - 3 Inef - 7 Normal  (2:3:7)
   Time-sensitive ratio:    6 Raw - 0 Inef - 6 Normal  (1:1)
+
+  NEW FEATURES IN v3.20.0:
+  - (choose1) hub folder support: each cycle picks one child folder at random
+    (equal probability per folder, regardless of file count), then picks one
+    file from that child. Child folders can be named arbitrarily (no numeric
+    prefix required). If a child folder itself carries (random) tag, its
+    sub-subfolders are handled via the normal (random) logic.
+  - Recursive pool size calculation for ManualHistoryTracker: fixes combination
+    history deduplication for folders with hubs and nested structures.
+  - parse_max_files now returns None if no -N- pattern is found, allowing
+    proper override in same-number folder pooling.
+  - Removed dead 'dmwm_file_set' variable from scan_for_numbered_subfolders
+    and all callers.
 
 ===========================================================================
                     GROUP 1: PAUSE BREAKS
 ===========================================================================
 
-... [all docstring content as before] ...
+1. WITHIN-FILE PAUSES
+   Files: Normal + Inef (Raw = 0%)
+   Value: random % drawn fresh per file (decimal, never rounded):
+     Normal: rng.uniform(2%, 5%)  e.g. 2.14%, 3.87%
+     Inef:   rng.uniform(10%, 15%)  e.g. 11.6%, 13.2%
+   e.g. 20s Normal file at 3.4% -> 0.68s pause
+   One pause per file in middle 80%. Skips drags, rapid-clicks, pre-DragStart.
+
+2. PRE-PLAY BUFFER
+   Files: ALL (including between cycles in the outer loop)
+   Value: rng.uniform(500, 800) ms * mult — applied before every file and
+   between every cycle boundary (end of cycle N -> start of cycle N+1).
+   Between-cycle buffer was added in v3.18.45 to prevent 0ms gap between
+   the last DragEnd of one cycle and the cursor transition of the next,
+   which caused drag-click at wrong position.
+
+2b. PER-VERSION TARGET DURATION VARIANCE
+    Each version gets a random target duration of base +/- 5 minutes.
+    e.g. --target-minutes 60 produces versions targeting 55-65 min each.
+    Drawn as rng.uniform(-300000, +300000) ms float per version.
+    The effective target (used by the build loop) uses this per-version value.
+    Inef massive pause budget is also pre-sampled against the per-version target.
+    Shown in print output: "Target: 62m 14s (base 60m +2.2m)"
+
+3. INEF BEFORE-FILE PAUSE
+   Files: Inef only, only if current cycle >= 25s
+   Value: rng.uniform(10000, 30000) ms flat (no mult)
+   Added between each full cycle (F1->...->FN loop).
+   Cursor drifts during this pause toward next file start position.
+
+4. INEFFICIENT MASSIVE PAUSE
+   Files: Inef only
+   Value: rng.uniform(240000, 420000) ms flat (no mult) = 4-7 min
+   One pause inserted at a safe random point after all cycles complete.
+   Loop pre-samples pause so total file stays near target duration.
+   Safe: no drag, no rapid-click, not pre-DragStart, not first/last 10%.
+
+5. MULTIPLIER SYSTEM
+   Continuous random range, 4 decimal places (never rounded):
+     Raw:    rng.uniform(1.1, 1.2)  e.g. 1.13, 1.17
+     Normal: rng.uniform(1.5, 1.7)  e.g. 1.53, 1.67
+     Inef:   rng.uniform(2.0, 3.0)  e.g. 2.14, 2.87
+   Multiplied (baked in at generation time):
+     - Pre-play buffer: rng.uniform(500, 800) * mult
+     - Cursor transition: rng.uniform(200, 400) * mult
+     - Within-file % pause: file_duration * pct (pct not multiplied; the pause
+       duration grows with larger files naturally)
+     - Mid-event random pause (50% chance/cycle): rng.uniform(200, 800) * mult
+   NOT multiplied (flat): inef before-file pause, massive pause, distraction files
+
+===========================================================================
+                    GROUP 2: PATTERN BREAKING
+===========================================================================
+
+6. CURSOR TRANSITION TO START POINT
+   Files: ALL (SKIPPED for click-sensitive)
+   Value: rng.uniform(200, 400) ms * mult — human path between files.
+   Skipped entirely for click-sensitive folders.
+
+7. IDLE CURSOR WANDERING
+   Files: ALL (SKIPPED for click-sensitive)
+   Fills existing recording gaps > 2000ms with cursor arcs/drifts.
+   Does NOT add time — movements fit inside the existing gap.
+   Not shown in manifest (zero time impact on total).
+
+8. MOUSE JITTER
+   Files: ALL (SKIPPED for click-sensitive)
+   Value: 9-21% of mouse moves get +/-1-3px random offsets.
+   Excluded near drags, rapid-click sequences, first/last 10% of file.
+
+9. VIRTUAL QUEUE - SUBFOLDER FILES
+   Each subfolder has its own shuffled queue. No file repeats until all
+   others used. Boundary guard prevents same file at queue wrap.
+   Same mechanism applies to distraction files (Feature 32).
+
+===========================================================================
+                    GROUP 3: SMOOTH OPERATION
+===========================================================================
+
+10. RAPID CLICK PROTECTION
+    3+ clicks within 1500ms detected. Jitter exclusion extended to 1500ms.
+    Detection set includes: Click, DragStart, LeftDown, LeftUp, RightDown, RightUp.
+    LeftDown/LeftUp added (v3.18.81) so native button-event double-clicks are
+    also protected — previously only 'Click' and 'DragStart' were detected.
+
+11. DRAG OPERATION PROTECTION
+    Hold+Move+Release detected. No jitter during entire drag sequence.
+
+12. EVENT TIMING INTEGRITY
+    No modifications inside drags, pre-DragStart, rapid-clicks, or first/
+    last 10%. Prevents click-hold clamping (unintended long drags).
+
+13. COMBINATION HISTORY
+    Tracks used file combos per subfolder across cycles.
+    Avoids repeating same combination. Persists via uploaded .txt files.
+
+14. MANUAL HISTORY UPLOAD
+    Upload COMBINATION_HISTORY_XX.txt to input_macros/combination_history/
+    All .txt files read; those combos avoided in future runs.
+
+15. ALPHABETICAL FILE NAMING
+    Raw: ^XX_A  Inef: XX_C (not-sign prefix)  Normal: XX_E (no prefix)
+    Output folder: (bundle_id) folder_name
+
+16. FOLDER-NUMBER STRUCTURE
+    F1, F2, F3.5 etc. F<N> prefix preferred; other numbers in name ignored.
+    e.g. "F3- press 1 to bank" -> num=3, the "1" in name is ignored.
+
+17. OPTIONAL TAG
+    Default chance: rng.uniform(24%, 33%) per bundle (decimal, never rounded).
+    Custom number: used as CENTRE of +/-2% random range (never rounded).
+      e.g. "optional23" -> rng.uniform(21%, 25%)
+           "optional50" -> rng.uniform(48%, 52%)
+           "optional50.5" -> rng.uniform(48.5%, 52.5%)
+    This adds variety so the same folder never hits the exact same threshold.
+    Range clamped so it never goes below 1% or above 99%.
+    Max-files/loops: "optional58-6-" = 58% centre, pick 1-6 files/loops.
+    No optional: "F1-4-" = always included, pick 1-4 files.
+    always_first/last wraps the entire picked group once (not per file).
+    For nested folders: -N- means max N complete sub-cycles (loops), not files.
+
+18. END TAG
+    Uses word-boundary match (end) — "tend" does NOT match.
+    Loop stops after this folder. Always included if reached.
+
+19. OPTIONAL+END COMBO TAG
+    Chosen = loop stops here. Skipped = loop continues.
+    Renamed from "optional/end" in v3.18.42.
+
+20. TIME SENSITIVE TAG
+    Ratio: 1:1 (half raw, half normal, zero inef).
+    Main folder tag propagates to ALL subfolders.
+
+21. CLICK SENSITIVE TAG
+    Disables ALL coordinate-changing features:
+    cursor path, mouse jitter, idle wandering, distraction insertion.
+    Main folder tag propagates to ALL subfolders.
+    Accepted: "click sensitive" / "click/time sensitive" / "click+time sensitive"
+
+22. CLICK/TIME SENSITIVE COMBO TAG
+    Both tag rules active: 1:1 ratio + no cursor/jitter/idle/distraction.
+
+23. DONT USE FEATURES ON ME TAG
+    Exact folder name (case-insensitive). Files inserted completely unmodified.
+    Marked [UNMODIFIED] in manifest.
+
+24. ALWAYS FIRST / LAST FILES
+    Tag in FILENAME (not folder name). Three modes:
+    A) Root-level (next to F1/F2/F3 subfolders): fires ONCE per strung file,
+       before all cycles start and after all cycles end.
+    B) Inside a specific subfolder (e.g. F0): wraps ONLY that subfolder's files.
+       Pattern: [AF] -> F0 files -> [AL] -> F1 -> F2 -> ...
+    C) Flat/single-subfolder folder: fires ONCE at very start and very end.
+    For nested folders (Feature 39): AF/AL wrap all loops together, not per loop.
+
+25. COMPREHENSIVE MANIFEST
+    !_MANIFEST_XX_!.txt in output folder. Shows per-version:
+    - File type, multiplier, total pause added
+    - Breakdown (x = mult applied, - = flat): PRE-Play Buffer, Within File Pauses,
+      CURSOR to Start Point, POST-SNAP GAP, DISTRACTION File Pause,
+      INEFFICIENT Before File Pause, INEFFICIENT MASSIVE PAUSE
+    - Full file list with cumulative end times
+
+26. SPECIFIC FOLDERS FILTERING
+    --specific-folders <file>: process only folders (and optionally subfolders)
+    listed in the file. Matching is case-insensitive, whitespace-stripped.
+
+    File format (one entry per line):
+      FolderName                   -> include folder, ALL its subfolders
+      FolderName: F1, F3, F4       -> include folder, ONLY subfolders F1 F3 F4
+      FolderName: F1, F3-F5        -> include folder, F1 and range F3 through F5
+
+    Examples:
+      22- Craft Dia- edge- lamp bank Z- S
+      22- Craft Dia- edge- lamp bank Z- S: F1, F2, F4
+      58- Smth R2H only: F1-F3
+
+    - Subfolder numbers are case-insensitive (F1 = f1 = 1)
+    - Decimal subfolders supported: F3.5
+    - If a requested subfolder doesn't exist, it is skipped with a warning
+    - Output folder: (bundle_id) folder_name
+
+27. CHAT INSERTS
+    --no-chat disables. After all versions are saved, floor(total * 0.20)
+    files are chosen at random (all types eligible, including raw) and one
+    chat file is spliced into each. 10 files → 2; 22 → 4; 5 → 1; 4 → 0.
+
+28. PRE-PLAY BUFFER GUARANTEE
+    files_added int counter (not list truthiness) ensures buffer fires before
+    every file including always_first/last. Avoids Python nonlocal edge case.
+
+29. FAIL-FAST ERROR HANDLING
+    Fatal errors call sys.exit(1) so GitHub Actions fails at the right step.
+
+30. FLAT FOLDER SUPPORT
+    JSON files directly in main folder (no numbered subfolders) = single pool.
+    All tags (always_first/last, time_sensitive, click_sensitive) still work.
+
+31. DISTRACTION FILE GENERATION + INSERTION
+    Trigger: DISTRACTIONS/ folder in input_macros/
+    Generates 50 temp files (30s-2min), each using 3 of 7 features:
+    wander, pause, right-click, typing, key-spam, shapes, backspace-hold.
+    backspace-hold (v3.18.83): holds Backspace 1-3 s (float ms, not rounded).
+    Chance: Normal 3.5-5%, Inef 3.5-7%, Raw 0%, Click-sensitive 0%.
+    NOT multiplied — flat pre-built durations. Shown in manifest.
+
+32. VIRTUAL QUEUE - DISTRACTION FILES
+    All 50 distraction files rotate before any repeat.
+    Boundary guard prevents consecutive repeat at queue wrap.
+
+33. 2:3:7 FILE RATIO DISTRIBUTION
+    raw=round(v x 2/12), inef=round(v x 3/12), normal=remainder.
+    12->2:3:7, 24->4:6:14, 20->3:5:12.
+    Time-sensitive override: 1:1 raw:normal, zero inef.
+
+34. FILE TRANSITION START GAP PROTECTION
+    80-150ms gap (POST-SNAP GAP) between snap MouseMove and first event of
+    next file. Prevents zero-gap DragStart = cursor clamp at transition.
+    Tracked in manifest as flat (no mult).
+
+35. INTRA-FILE ZERO-GAP PROTECTION
+    On load: two checks, both shift all events from the click forward.
+    Part A — MouseMove->ButtonDown gap < 30ms shifted to 35ms.
+    Prevents fast-cursor recordings clicking short of target tile.
+    Raised from 15→30ms (v3.19.06): 15-29ms gaps were slipping through.
+    Part B — DragEnd->DragStart gap < 200ms shifted to 200ms.
+    Prevents rapid DragStart re-press. Threshold raised 150→200ms v3.18.92.
+    Part C (v3.19.02) — any button-event->button-down gap < 200ms shifted
+    to 200ms. Catches LeftUp→LeftDown, DragEnd→LeftDown, LD→LD (missing
+    release), and all cross-type rapid re-press cases missed by A and B.
+    Applied before any other features, to raw events only.
+
+36. ORIGINAL FILES DEDUPLICATION
+    Counts each unique filename once across all subfolders.
+    Copied subfolders shown as "(N copied folder(s))" in manifest.
+
+37. MAX-FILES TAG
+    "-N-" in folder name = pick 1-N files (or loops for nested folders).
+    "F3 optional58-6-" = 58% chance, 1-6 files.
+    "F1-4-" = always included, 1-4 files.
+
+38. PROBLEMATIC KEY FILTERING
+    On load (before any features): strips keys that break macro playback.
+    Filtered: HOME(36), END(35), PAGE_UP(33), PAGE_DOWN(34), PAUSE(19),
+              PRINT_SCREEN(44)
+    Kept: ESC(27) — valid in-game action (closing menus, cancelling dialogs).
+    IMPORTANT: base_time captured BEFORE filtering so files whose only early
+    event is a filtered key (e.g. END at t=90ms) keep their full duration.
+    Without this, the 90ms anchor is lost and the file collapses to near-zero.
+
+39. NESTED SUBFOLDER SUPPORT
+    A numbered subfolder (e.g. F5) can contain its own F1/F2/F3/F4 instead
+    of direct JSON files. Detected automatically during scanning.
+    -N- on the outer folder = max N complete inner loops (not N files).
+    always_first/last at F5's root level fire ONCE before all loops and
+    ONCE after all loops (not per loop).
+    Internal subfolders support all tags: optional, end, time/click sensitive.
+    Separate ManualHistoryTracker maintained for nested folder's combos.
+
+40. LOGOUT SEQUENCE FOLDER (Feature 40)
+    Trigger: folder named 'LOGOUT, wait, in' (case-insensitive) at the root
+    level of input_macros/.
+    Contents: .json files assigned by numeric prefix in filename.
+      Files assigned by numeric prefix in filename (e.g. '1- logout.json' → slot 1).
+      Sub-slots supported (e.g. '1.1-' sorts between 1 and 2).
+      Random wait fires after the last file whose prefix is 2.x.
+      Any number of slots supported; minimum: one pre-2, one 2.x, one post-2.
+    Two break files built per output folder (each with a fresh random wait):
+    Long break:  7200000–16200000 ms (2h–4.5h)
+    Short break: 1800000– 5400000 ms (30min–90min)
+    Float ms, never rounded.
+    Outputs: "@ LOGOUT LONG BREAK.json" + "@ LOGOUT SHORT BREAK.json"
+    Features: NO anti-detection features applied (files inserted raw).
+              filter_problematic_keys() is applied on load.
+    Output: written to output_root/- logout.json, then copied to each
+            bundle folder as "@ N LOGOUT.JSON" (same as static logout file).
+    Priority: takes precedence over the legacy '- logout.json' static file.
+    Fallback: if the folder is missing, the old static file search still runs.
+    The folder is excluded from the main macro scan (not treated as a macro folder).
+    Dedicated rng seeded from bundle_id + 31337 — does not affect main rng state.
+
+41. SAME-NUMBER FOLDER POOLING (Feature 41)
+    Multiple physical subfolders that share the same F-number are merged into
+    a single logical slot in the cycle. The cycle still sees one slot per
+    unique number; the combined pool of all matching folders is used for
+    file selection and always_first/last picking.
+    Examples:
+      F2- Click anvil, F2- Click anvil - Copy, F2- dance
+        → one F2 slot; files from all three folders pooled together
+      F0 optional28-13-, F0 optional28-13- (1)
+        → one F0 slot; 28% chance, pick up to 13 files from combined pool
+    Merge rules:
+      - files / always_first / always_last: concatenated
+      - Boolean tags (is_optional, is_end, is_time_sensitive, is_click_sensitive):
+        OR — if ANY contributing folder has the tag, the merged slot gets it
+      - Scalar tags (optional_chance, max_files): first non-None value wins
+      - Nested subfolders: inner dicts merged by inner slot number
+    A [Pool] log line is printed for each merge: "F2: merged 'name' (N files total)"
+
+42. GROUP FOLDER SUPPORT
+    Organizer folders one level below input_macros/ whose children have
+    F-numbered subfolders (but the organizer itself does not) are treated as
+    group folders. Selecting a group name runs all its children individually.
+    Structure: input_macros/GroupName/Macro1, Macro2, ...
+    Special folders (DISTRACTIONS, LOGOUT, combination_history) are never groups.
+
+===========================================================================
+                    CRITICAL FEATURES — DO NOT BREAK
+===========================================================================
+The items below are load-bearing. If any of these are altered, removed,
+or have their order/threshold changed without re-verifying against the
+specific bug they were written to fix, strung files can come out with
+broken loop actions, misfired clicks, or misparsed input. Each entry
+names the exact mechanism, why it exists, and the version where it was
+introduced or last hardened. Before touching ANY of the functions named
+below, re-read the matching changelog entry for the full failure mode.
+
+1. DUAL-COPY RULE (applies to every item below)
+   The script contains two structurally identical copies of every function
+   (a legacy block and an active block). EVERY fix in this list MUST be
+   applied to BOTH copies or the bug reappears intermittently depending on
+   which code path executes. This is the single most common cause of
+   "the fix didn't work" reports — verify both copies after every edit.
+
+2. Part A — MouseMove -> click gap enforcement (_ZERO_GAP_THRESHOLD=35ms)
+   Function: filter_problematic_keys, both copies.
+   Why: a click firing <35ms after the preceding MouseMove can register
+   before the game client has processed the cursor position, causing a
+   misclick on the wrong tile. Part A shifts the click +settling-MM so the
+   cursor has time to land. v3.19.06, v3.19.18, v3.19.27 raised/tuned this
+   threshold after real misclick reports — do not lower it casually.
+
+3. Part B — DragEnd -> DragStart re-press gap (_DRAG_REPRESS_THRESHOLD=200ms)
+   Function: filter_problematic_keys, both copies.
+   Why: re-pressing too soon after releasing can be eaten by the client.
+   MUST be skipped for genuine rapid/double-clicks (see item 5) or it will
+   stretch intentional double-clicks into broken single clicks.
+
+4. Part F — long-gap settling MouseMove (_LONG_GAP_SETTLE_MS=1000ms)
+   Function: filter_problematic_keys, both copies.
+   Why: after a long idle gap, inserts a MM at the EXACT click coordinates
+   (no offset) just before the click fires, so the cursor visibly arrives
+   before clicking instead of teleporting. Settling MM must never use a
+   random offset — exact coords only, or the click can land off-target.
+
+5. detect_rapid_click_sequences + soft double-click pre-scan
+   Function: detect_rapid_click_sequences (apply_cycle_features) AND the
+   "Rapid pre-scan" block inside filter_problematic_keys. Both copies of
+   both. Pixel tolerance MUST stay at 20px (matches _RAPID_POS_TOL_SOFT) —
+   lowering it back to 10px reopens the gap where clicks 11-20px apart lose
+   protection from pause/jitter injection between them (fixed v3.19.43).
+   Any two clicks within 2000ms and 20px of each other are a "click cluster"
+   and every event between them is added to protected_set/_no_modify_set —
+   this protected_set MUST be respected by Part B, intra-file pause,
+   mid-event pause, and jitter, or genuine double/rapid clicks get stretched
+   or deflected (the original CBD(50) bug class, v3.19.43/v3.19.49).
+
+6. add_pre_click_jitter exclusion zone + convergence check
+   Function: add_pre_click_jitter, both copies.
+   - click_types for the 1000ms exclusion MUST include DragStart AND
+     DragEnd (v3.19.43) — DragEnd was missing originally, leaving a gap
+     where jitter could fire just after a release and before the next
+     action.
+   - The CONVERGENCE CHECK (v3.19.46, blind-spot fixed v3.19.49) excludes
+     any MouseMove that is closer to an upcoming click than the previous
+     MM was — i.e. part of an approach trajectory. Time-distance alone
+     (1000ms) is NOT sufficient: approaches can run 1-5+ seconds, and
+     without the convergence check jitter zigzags the cursor mid-approach,
+     causing it to land on the wrong tile when the click fires (the
+     FMFcraftdia bug, v3.19.46). _prev_mm_x/_prev_mm_y MUST be seeded from
+     the first click's position, not None — seeding with None disables the
+     check entirely for the first MouseMove in the file (v3.19.49).
+
+7. insert_idle_mouse_movements click_proximity exclusion (click_window=3000ms)
+   Function: insert_idle_mouse_movements, both copies.
+   click_types set MUST include DragStart and DragEnd alongside
+   Click/LeftDown/LeftUp/RightDown/RightUp (v3.19.61). Without DragStart/
+   DragEnd in this set, gaps >2000ms before a drag-click are eligible for
+   idle wandering, and the cursor may not have fully returned to position
+   when the click fires — wrong-tile click. This was the longest-standing
+   bug in the file; it predates all (random)-folder work and is unrelated
+   to it. If "cursor hovers, darts away, comes back late for the click"
+   resurfaces in a NORMAL (non-random) file, check this set first.
+
+8. (random) folder pre-click gap floor (_RANDOM_MIN_PRECLICK_MS=38ms)
+   Function: add_file_to_cycle event placement, slot_is_random branch,
+   both copies. The (random)-folder speed/idle-gap compression (v3.19.56)
+   divides ALL inter-event gaps by 2.5-3.5x INCLUDING the gap right before
+   a click — without the 38ms floor, that gap can compress to <10ms and
+   the cursor is still mid-approach when the click fires (v3.19.59). This
+   floor must stay >= Part A's 35ms threshold (item 2) with margin.
+
+9. protected_set / drag_set exclusions in insert_intra_file_pauses and
+   the Step 3b mid-event pause (apply_cycle_features)
+   Both pause-injection mechanisms MUST check protected_set (from item 5)
+   AND drag_set (every index between a DragStart and its DragEnd) before
+   selecting a pivot point. A pivot landing inside an active drag or a
+   click cluster injects hundreds of ms into what should be a <200ms
+   window, breaking double-click and drag timing.
+
+10. Cache correctness (_raw_file_cache / _processed_events_cache)
+    Function: add_file_to_cycle, both copies. Parts A-F (items 2-4) MUST
+    run ONLY on the slow (cache-miss) path — they were originally outside
+    the if/else and ran on every call including cache hits, which didn't
+    break correctness but silently defeated the entire point of caching
+    (v3.19.40). If restructuring this function, confirm Parts A-F are
+    still indented inside the `else:` branch after any edit.
+
+11. (random) sub-subfolder manifest folder_num override
+    Function: _play_nested_loop / _play_nested_group, both copies.
+    _parent_folder_num MUST be threaded through for _random_single items
+    so the manifest reports the PARENT F-step number, not the sub-subfolder
+    number — this is cosmetic, not a parsing risk, but breaking it makes
+    manifests unreadable for (random) folders specifically (v3.19.53).
+
+12. Group-folder output wrapping order: _group_name checked BEFORE
+    args.specific_folders / args.group_subfolders
+    Function: output folder assignment in main(), both copies. The check
+    order matters: _group_name must be tested FIRST, or specific-folders
+    mode silently ignores it and writes flat instead of wrapped output
+    (v3.19.38). This is an output-organization bug, not a playback bug,
+    but it has regressed twice already from refactors that reordered the
+    if/elif chain — preserve the order.
+
+WHEN ADDING A NEW FEATURE: if it touches event timing, event insertion,
+or event removal in any function listed above, re-read that function's
+docstring/comments for the EXACT threshold and EXACT exclusion set before
+changing anything nearby. A "harmless" refactor of surrounding code that
+moves a check outside its original if/else block, or changes a set literal
+without noticing it gates click protection, is how every bug in this list
+was introduced.
+
+===========================================================================
+
+CHANGELOG (recent):
+===========================================================================
+- v3.20.0: (choose1) hub folder support, recursive pool size calculation,
+           parse_max_files returns None, removed dmwm_file_set dead code.
+           See feature list above for details.
+- v3.19.66: (choose1) now respects (random) tag on chosen child folder.
+- v3.19.65: New folder tag: (choose1).
+- v3.19.63: Added CRITICAL FEATURES documentation section.
+- ... (earlier entries omitted for brevity)
+===========================================================================
 """
 
 import argparse, json, random, re, sys, os, math, shutil, itertools
 from pathlib import Path
 
-VERSION = "v3.19.66"
+VERSION = "v3.20.0"
 _MAX_SINGLE_PAUSE_MS = 1_536_000  # 25.6 min hard ceiling on any single pause
 
 # Two-level file cache — shared across both main() copies (module-level)
@@ -1313,7 +1769,7 @@ def _pick_af_al(pool, rng):
         return pool   # already a single Path (nested dicts etc.)
     return rng.choice(pool)
 
-def string_cycle(subfolder_files, combination, rng, dmwm_file_set=set(),
+def string_cycle(subfolder_files, combination, rng,
                  distraction_files=None, distraction_chance=0.0,
                  is_click_sensitive=False,
                  play_always_first=True, play_always_last=True,
@@ -4546,7 +5002,7 @@ def main():
                 _play_af = ((not _is_flat_folder) or (_cycle_count == 0)) and not _has_root_af
                 _play_al = (not _is_flat_folder) and not _has_root_al   # always_last injected after loop
                 cycle_result = string_cycle(
-                    subfolder_files, combo, rng, dmwm_file_set,
+                    subfolder_files, combo, rng,
                     distraction_files=dist_queue,
                     distraction_chance=cycle_dist_chance,
                     is_click_sensitive=folder_is_click_sensitive,
