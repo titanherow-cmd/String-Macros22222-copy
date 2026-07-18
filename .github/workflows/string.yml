@@ -103,7 +103,7 @@ on:
       target_minutes:
         description: 'Target duration per stringed file *'
         required: true
-        default: '1'
+        default: '0'
 
       versions:
         description: 'Total versions to generate *'
